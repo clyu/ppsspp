@@ -413,7 +413,11 @@ bool System_GetPropertyBool(SystemProperty prop) {
 	case SYSPROP_CAN_READ_BATTERY_PERCENTAGE:
 		return true;
 	case SYSPROP_ENOUGH_RAM_FOR_FULL_ISO:
+#if PPSSPP_ARCH(64BIT)
 		return true;
+#else
+		return false;
+#endif
 	default:
 		return false;
 	}
@@ -619,7 +623,7 @@ bool System_MakeRequest(SystemRequestType type, int requestId, const std::string
 		return true;
 	case SystemRequestType::ASK_USERNAME_PASSWORD:
 		std::thread([=] {
-			std::string username;
+			std::string username = param2;
 			std::string password;
 			if (UserPasswordBox_GetStrings(MainWindow::GetHInstance(), MainWindow::GetHWND(), ConvertUTF8ToWString(param1).c_str(), &username, &password)) {
 				g_requestManager.PostSystemSuccess(requestId, (username + '\n' + password).c_str());
@@ -695,7 +699,7 @@ bool System_MakeRequest(SystemRequestType type, int requestId, const std::string
 	{
 		auto err = GetI18NCategory(I18NCat::ERRORS);
 		std::string_view backendSwitchError = err->T("GenericBackendSwitchCrash", "PPSSPP crashed while starting. This usually means a graphics driver problem. Try upgrading your graphics drivers.\n\nGraphics backend has been switched:");
-		std::wstring full_error = ConvertUTF8ToWString(StringFromFormat("%s %s", backendSwitchError, param1.c_str()));
+		std::wstring full_error = ConvertUTF8ToWString(StringFromFormat("%.*s %s", (int)backendSwitchError.size(), backendSwitchError.data(), param1.c_str()));
 		std::wstring title = ConvertUTF8ToWString(err->T("GenericGraphicsError", "Graphics Error"));
 		MessageBox(MainWindow::GetHWND(), full_error.c_str(), title.c_str(), MB_OK);
 		return true;
@@ -1037,14 +1041,11 @@ int WINAPI WinMain(HINSTANCE _hInstance, HINSTANCE hPrevInstance, LPSTR szCmdLin
 			if (wideArgs[i].find(gpuBackend) != std::wstring::npos && wideArgs[i].size() > gpuBackend.size()) {
 				const std::wstring restOfOption = wideArgs[i].substr(gpuBackend.size());
 
-				// Force software rendering off, as picking directx9 or gles implies HW acceleration.
-				// Once software rendering supports Direct3D9/11, we can add more options for software,
-				// such as "software-gles", "software-d3d9", and "software-d3d11", or something similar.
+				// Force software rendering off, as picking gles implies HW acceleration.
+				// We could add more options for software such as "software-gles",
+				// "software-vulkan" and "software-d3d11", or something similar.
 				// For now, software rendering force-activates OpenGL.
-				if (restOfOption == L"directx9") {
-					g_Config.iGPUBackend = (int)GPUBackend::DIRECT3D9;
-					g_Config.bSoftwareRendering = false;
-				} else if (restOfOption == L"directx11") {
+				if (restOfOption == L"directx11") {
 					g_Config.iGPUBackend = (int)GPUBackend::DIRECT3D11;
 					g_Config.bSoftwareRendering = false;
 				} else if (restOfOption == L"gles") {
