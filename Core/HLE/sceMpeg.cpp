@@ -1914,7 +1914,11 @@ static u32 sceMpegAvcCsc(u32 mpeg, u32 sourceAddr, u32 rangeAddr, int frameWidth
 	}
 
 	int destSize = ctx->mediaengine->writeVideoImageWithRange(destAddr, frameWidth, ctx->videoPixelMode, x, y, width, height);
-	gpu->PerformWriteFormattedFromMemory(destAddr, destSize, frameWidth, (GEBufferFormat)ctx->videoPixelMode);
+	if (destSize > 0) {
+		// Only tell the GPU about it if we actually wrote something - a zero size would make
+		// PerformWriteFormattedFromMemory compute a zero height if it decides to resize.
+		gpu->PerformWriteFormattedFromMemory(destAddr, destSize, frameWidth, (GEBufferFormat)ctx->videoPixelMode);
+	}
 
 	// Do not use avcDecodeDelayMs 's value
 	// Will cause video 's screen dislocation in Bleach heat of soul 6

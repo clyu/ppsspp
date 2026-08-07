@@ -938,6 +938,17 @@ int MediaEngine::writeVideoImageWithRange(u32 bufferPtr, int frameWidth, int vid
 		videoLineSize = frameWidth * sizeof(u16);
 		break;
 	}
+	// Clamp the requested range to what the decoded frame actually holds *before* computing the
+	// size. The loops below only write the clamped number of lines, so computing the size from the
+	// unclamped height would over-report how much of the destination we touched, and the caller
+	// hands that size straight to the GPU as "this is all fresh video data".
+	width = std::min(width, m_desWidth - xpos);
+	height = std::min(height, m_desHeight - ypos);
+	if (width <= 0 || height <= 0) {
+		// Nothing of the frame falls inside the requested range.
+		return 0;
+	}
+
 	int videoImageSize = videoLineSize * height;
 
 	if (!Memory::IsValidRange(bufferPtr, videoImageSize) || frameWidth > 2048) {
@@ -960,11 +971,8 @@ int MediaEngine::writeVideoImageWithRange(u32 bufferPtr, int frameWidth, int vid
 	if (swizzle) {
 		imgbuf = new u8[videoImageSize];
 	}
-
-	if (width > m_desWidth - xpos)
-		width = m_desWidth - xpos;
-	if (height > m_desHeight - ypos)
-		height = m_desHeight - ypos;
+	// The loops below walk imgbuf forward, so hang on to the start of the allocation.
+	u8 *imgbufStart = imgbuf;
 
 	switch (videoPixelMode) {
 	case GE_CMODE_32BIT_ABGR8888:
@@ -1016,8 +1024,8 @@ int MediaEngine::writeVideoImageWithRange(u32 bufferPtr, int frameWidth, int vid
 		if (byc == 0)
 			byc = 1;
 
-		DoSwizzleTex16((const u32 *)imgbuf, buffer, bxc, byc, videoLineSize);
-		delete [] imgbuf;
+		DoSwizzleTex16((const u32 *)imgbufStart, buffer, bxc, byc, videoLineSize);
+		delete [] imgbufStart;
 	}
 	NotifyMemInfo(MemBlockFlags::WRITE, bufferPtr, videoImageSize, "VideoDecodeRange");
 
