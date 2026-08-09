@@ -138,6 +138,9 @@ MediaEngine::MediaEngine() {
 
 MediaEngine::~MediaEngine() {
 	closeMedia();
+	// closeMedia() is also the stream-reload path, which keeps the last converted frame alive.
+	// This is the one place that really is the end of the line for it.
+	freeVideoFrame();
 }
 
 void MediaEngine::closeMedia() {
@@ -351,10 +354,11 @@ bool MediaEngine::openContext(bool keepReadPos) {
 
 void MediaEngine::closeContext() {
 #ifdef USE_FFMPEG
-	if (m_buffer)
-		av_free(m_buffer);
-	if (m_pFrameRGB)
-		av_frame_free(&m_pFrameRGB);
+	// m_pFrameRGB and its m_buffer backing store are deliberately left alone here. They hold the
+	// last converted frame, and sceMpegAvcCsc can legitimately ask for it after the decoder is
+	// gone: on hardware the CSC source is the game's own YCbCr buffer, which no amount of stream
+	// reloading can take away, so a reload must not make the picture vanish off the screen.
+	// freeVideoFrame() owns their lifetime instead.
 	if (m_pFrame)
 		av_frame_free(&m_pFrame);
 	if (m_pIOContext && m_pIOContext->buffer)
@@ -382,7 +386,19 @@ void MediaEngine::closeContext() {
 		avformat_close_input(&m_pFormatCtx);
 	sws_freeContext(m_sws_ctx);
 	m_sws_ctx = nullptr;
+	// We just freed the context, so make sure updateSwsFormat() really rebuilds it - it skips the
+	// work whenever the desired format still matches m_sws_fmt.
+	m_sws_fmt = -1;
 	m_pIOContext = nullptr;
+#endif
+}
+
+void MediaEngine::freeVideoFrame() {
+#ifdef USE_FFMPEG
+	if (m_pFrameRGB)
+		av_frame_free(&m_pFrameRGB);
+	if (m_buffer)
+		av_free(m_buffer);
 #endif
 	m_buffer = nullptr;
 }
@@ -577,16 +593,17 @@ bool MediaEngine::setVideoDim(int width, int height)
 		return false;
 	AVCodecContext *m_pCodecCtx = codecIter->second;
 
+	int desWidth, desHeight;
 	if (width == 0 && height == 0)
 	{
 		// use the orignal video size
-		m_desWidth = m_pCodecCtx->width;
-		m_desHeight = m_pCodecCtx->height;
+		desWidth = m_pCodecCtx->width;
+		desHeight = m_pCodecCtx->height;
 	}
 	else
 	{
-		m_desWidth = width;
-		m_desHeight = height;
+		desWidth = width;
+		desHeight = height;
 	}
 
 	// Allocate video frame
@@ -598,14 +615,21 @@ bool MediaEngine::setVideoDim(int width, int height)
 	m_sws_ctx = nullptr;
 	m_sws_fmt = -1;
 
-	if (m_desWidth == 0 || m_desHeight == 0) {
-		// Can't setup SWS yet, so stop for now.
+	if (desWidth == 0 || desHeight == 0) {
+		// Can't setup SWS yet, so stop for now. Note that we work on locals until here on purpose:
+		// openContext() calls us before the H.264 SPS has been parsed, so the codec still reports
+		// 0x0, and storing that would throw away the dimensions of the frame we're still holding.
 		return false;
 	}
 
+	m_desWidth = desWidth;
+	m_desHeight = desHeight;
+
 	updateSwsFormat(GE_CMODE_32BIT_ABGR8888);
 
-	// Allocate video frame for RGB24
+	// Allocate video frame for RGB24. Any previous one outlived closeContext() so that a stream
+	// reload wouldn't drop the picture, which makes releasing it our job here.
+	freeVideoFrame();
 	m_pFrameRGB = av_frame_alloc();
 #if LIBAVCODEC_VERSION_INT >= AV_VERSION_INT(57, 12, 100)
 	int numBytes = av_image_get_buffer_size((AVPixelFormat)m_sws_fmt, m_desWidth, m_desHeight, 1);
@@ -708,7 +732,10 @@ bool MediaEngine::stepVideo(int videoPixelMode, bool skipFrame) {
 			int result = avcodec_decode_video2(m_pCodecCtx, m_pFrame, &frameFinished, &packet);
 #endif
 			if (frameFinished) {
-				if (!m_pFrameRGB) {
+				// "We already have one" isn't enough any more - m_pFrameRGB now outlives a stream
+				// reload, so it may still be sized for the previous stream. Rebuild it whenever it
+				// doesn't match what the decoder is actually handing us.
+				if (!m_pFrameRGB || m_desWidth != m_pCodecCtx->width || m_desHeight != m_pCodecCtx->height) {
 					setVideoDim();
 				}
 				if (m_pFrameRGB && !skipFrame) {
@@ -960,7 +987,10 @@ int MediaEngine::writeVideoImageWithRange(u32 bufferPtr, int frameWidth, int vid
 	u8 *buffer = Memory::GetPointerWriteUnchecked(bufferPtr);
 
 #ifdef USE_FFMPEG
-	if (!m_pFrame || !m_pFrameRGB)
+	// Only m_pFrameRGB matters here - we read the already converted picture out of it and never
+	// touch the decoder's own frame. Requiring m_pFrame too would make a perfectly good frame
+	// unusable for every sceMpegAvcCsc between a stream reload and the next successful decode.
+	if (!m_pFrameRGB)
 		return 0;
 
 	// lock the image size

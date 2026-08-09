@@ -760,6 +760,11 @@ static bool InitPmp(MpegContext * ctx){
 		return false;
 	}
 
+	// A previously converted frame can outlive closeContext() now, and we're about to replace the
+	// buffer it points at with a pmp-sized one, so drop it first instead of reusing a frame that
+	// describes the old allocation.
+	mediaengine->freeVideoFrame();
+
 	// initialize ctx->mediaengine->m_pFrame and ctx->mediaengine->m_pFrameRGB
 	if (!mediaengine->m_pFrame){
 		mediaengine->m_pFrame = av_frame_alloc();

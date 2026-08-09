@@ -62,6 +62,9 @@ public:
 	// open the mpeg context
 	bool openContext(bool keepReadPos = false);
 	void closeContext();
+	// Releases m_pFrameRGB / m_buffer. Deliberately *not* done by closeContext() - see the comment
+	// there. Anything that reaches in and replaces those two has to call this first.
+	void freeVideoFrame();
 
 	// Returns number of packets actually added. I guess the buffer might be full.
 	int addStreamData(const u8 *buffer, int addSize);
