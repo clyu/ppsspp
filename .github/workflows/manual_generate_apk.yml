@@ -1,24 +1,11 @@
 name: Manual Generate Android APK
 on:
-  workflow_dispatch:
-    inputs:
-
-      buildVariant:
-        type: choice
-        description: 'Build Variant'
-        required: true
-        default: 'NormalOptimized'
-        options: 
-        - NormalOptimized
-        - NormalDebug
-        - VROptimized
-        - VRDebug
-        - LegacyOptimized
+  workflow_dispatch: {}
 
 jobs:
 
   apk:
-    name: Generate ${{ github.event.inputs.buildVariant }} APK
+    name: Generate NormalOptimized APK (arm64-v8a)
     runs-on: ubuntu-latest
 
     steps:
@@ -39,30 +26,22 @@ jobs:
           # TODO: should try to fetch tags from whereever this repo was forked from before fetching from official repo
           git remote add upstream https://github.com/hrydgard/ppsspp.git # fetching from official repo as a fallback
           git fetch --deepen=15000 --no-recurse-submodules --tags --force upstream || exit 0
-        
+
       - name: Setup JDK
         uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
           cache: 'gradle'
-        
-      #- name: Setup SDK # gradlew will install SDK automatically, thus this step not needed
-      #  uses: android-actions/setup-android@v3
-          
-      #- name: Setup NDK # gradle will install NDK (side by side) automatically, thus explictly seting up NDK here will cause not enough storage issue when building debug variant
-      #  uses: nttld/setup-ndk@v1
-      #  with:
-      #    ndk-version: r21e
+
+      # The SDK and the NDK version pinned by android/build.gradle.kts are both
+      # preinstalled on the ubuntu-latest runner, so no setup steps are needed.
 
       - name: Assemble APK # only arm64-v8a, building every ABI takes far too long on a hosted runner
         run: |
           echo "Valid version tags: ${{ steps.valid-tags.outputs.count }}"
-          ./gradlew assemble${{ github.event.inputs.buildVariant }} -Pandroid.injected.build.abi=arm64-v8a --stacktrace
-      
-      #- name: Gradle Test
-      #  run: bash ./gradlew test${{ github.event.inputs.buildVariant }}UnitTest --stacktrace
-      
+          ./gradlew assembleNormalOptimized -Pandroid.injected.build.abi=arm64-v8a --stacktrace
+
       - name: Package build
         run: |
           mkdir ppsspp
@@ -73,5 +52,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: android-${{ github.event.inputs.buildVariant }} build
+          name: ppsspp-normal-optimized-arm64-v8a
           path: ppsspp/
