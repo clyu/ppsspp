@@ -1,6 +1,20 @@
-name: Manual Generate Android APK
+name: Generate Android APK
 on:
   workflow_dispatch: {}
+  push:
+    paths-ignore:
+      # Deliberately no '**.txt' here: that would swallow CMakeLists.txt and assets/gamecontrollerdb.txt.
+      - '**.md'
+      - 'Tools/**'
+      - '.editorconfig'
+      - '.gitattributes'
+      - '.gitignore'
+      - 'appveyor.yml'
+
+# A full native build is expensive, so superseded runs on the same ref are cancelled.
+concurrency:
+  group: apk-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
 
