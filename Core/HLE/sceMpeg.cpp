@@ -1814,7 +1814,13 @@ static u32 sceMpegFlushAllStream(u32 mpeg) {
 		return hleLogWarning(Log::Mpeg, -1, "UNIMPL + bad mpeg handle");
 	}
 
-	ctx->isAnalyzed = false;
+	// Deliberately *not* clearing isAnalyzed here. That flag exists to stop sceMpegQueryStreamOffset
+	// from calling loadStream() behind the game's back (see AnalyzeMpeg), and clearing it reopens
+	// that hole: a game that flushes between frames leaves the guard down, so a query from another
+	// thread can tear the media engine down while the render thread is still waiting to sceMpegAvcCsc
+	// the frame it just decoded - which then converts nothing and leaves stale pixels on screen.
+	// The media engine is reinitialized after a flush anyway, by the packetsRead == 0 branch in
+	// sceMpegRingbufferPut, which we set up by zeroing the ringbuffer counters below.
 
 	auto ringbuffer = PSPPointer<SceMpegRingBuffer>::Create(ctx->mpegRingbufferAddr);
 	if (ringbuffer.IsValid()) {
