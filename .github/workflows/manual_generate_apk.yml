@@ -51,10 +51,18 @@ jobs:
       # The SDK and the NDK version pinned by android/build.gradle.kts are both
       # preinstalled on the ubuntu-latest runner, so no setup steps are needed.
 
-      - name: Assemble APK # only arm64-v8a, building every ABI takes far too long on a hosted runner
+      - name: Assemble APK
+        # android.injected.build.abi keeps the native build down to one ABI, but AGP reads that
+        # property as "the IDE is deploying to a device" and stamps android:testOnly="true" onto
+        # the manifest, which the package installer then refuses to install. Setting
+        # android.injected.testOnly explicitly short-circuits that inference -- see
+        # ComponentUtils.isTestApk() in the Android Gradle plugin.
         run: |
           echo "Valid version tags: ${{ steps.valid-tags.outputs.count }}"
-          ./gradlew assembleNormalOptimized -Pandroid.injected.build.abi=arm64-v8a --stacktrace
+          ./gradlew assembleNormalOptimized \
+            -Pandroid.injected.build.abi=arm64-v8a \
+            -Pandroid.injected.testOnly=false \
+            --stacktrace
 
       - name: Package build
         run: |
@@ -62,6 +70,20 @@ jobs:
           find android/build -name "*.apk" -exec cp -v '{}' ppsspp/ \;
           ls -l ppsspp/
           [ -n "$(ls -A ppsspp)" ] || { echo "::error::No APK was produced"; exit 1; }
+
+      - name: Verify the APK is installable
+        run: |
+          AAPT2=$(ls -1 "$ANDROID_HOME"/build-tools/*/aapt2 2>/dev/null | sort -V | tail -n1)
+          if [ -z "$AAPT2" ]; then
+            echo "::warning::aapt2 not found, skipping the manifest check"
+            exit 0
+          fi
+          "$AAPT2" dump xmltree --file AndroidManifest.xml ppsspp/*.apk > manifest.txt
+          if grep -q 'testOnly' manifest.txt; then
+            echo "::error::APK is marked android:testOnly, the package installer will reject it"
+            exit 1
+          fi
+          grep -E 'versionName|package=' manifest.txt | head -n 5
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
