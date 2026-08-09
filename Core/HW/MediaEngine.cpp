@@ -138,9 +138,10 @@ MediaEngine::MediaEngine() {
 
 MediaEngine::~MediaEngine() {
 	closeMedia();
-	// closeMedia() is also the stream-reload path, which keeps the last converted frame alive.
-	// This is the one place that really is the end of the line for it.
+	// closeMedia() is also the stream-reload path, which keeps the converted pictures alive.
+	// This is the one place that really is the end of the line for them.
 	freeVideoFrame();
+	freeYCbCrSlots();
 }
 
 void MediaEngine::closeMedia() {
@@ -391,6 +392,63 @@ void MediaEngine::closeContext() {
 	m_sws_fmt = -1;
 	m_pIOContext = nullptr;
 #endif
+}
+
+void MediaEngine::storeYCbCrFrame(int videoPixelMode) {
+#ifdef USE_FFMPEG
+	// No target means the caller went through the direct sceMpegAvcDecode path, which draws
+	// immediately and never asks for a picture by address - nothing to file.
+	if (m_ycbcrTarget == 0 || !m_pFrameRGB || m_desWidth <= 0 || m_desHeight <= 0)
+		return;
+
+	// stepVideo() just set linesize to exactly this, so the picture is tightly packed.
+	const size_t need = (size_t)m_desWidth * m_desHeight * getPixelFormatBytes(videoPixelMode);
+
+	YCbCrSlot *slot = nullptr;
+	for (YCbCrSlot &candidate : m_ycbcrSlots) {
+		if (candidate.addr == m_ycbcrTarget || candidate.addr == 0) {
+			slot = &candidate;
+			break;
+		}
+		// Fall back to recycling whichever slot has gone unused the longest.
+		if (!slot || candidate.lastUsed < slot->lastUsed)
+			slot = &candidate;
+	}
+
+	if (slot->size < need) {
+		delete[] slot->rgb;
+		slot->rgb = new u8[need];
+		slot->size = need;
+	}
+	memcpy(slot->rgb, m_pFrameRGB->data[0], need);
+	slot->addr = m_ycbcrTarget;
+	slot->width = m_desWidth;
+	slot->height = m_desHeight;
+	slot->pixelMode = videoPixelMode;
+	slot->lastUsed = ++m_ycbcrTick;
+
+	// Consume the target. Every filed picture has to be claimed by a sceMpegAvcDecodeYCbCr naming
+	// its buffer - otherwise a game mixing in the direct sceMpegAvcDecode path would keep filing
+	// its frames under whichever address the YCbCr path happened to use last.
+	m_ycbcrTarget = 0;
+#endif
+}
+
+const MediaEngine::YCbCrSlot *MediaEngine::findYCbCrSlot(u32 addr) const {
+	if (addr == 0)
+		return nullptr;
+	for (const YCbCrSlot &slot : m_ycbcrSlots) {
+		if (slot.addr == addr && slot.rgb)
+			return &slot;
+	}
+	return nullptr;
+}
+
+void MediaEngine::freeYCbCrSlots() {
+	for (YCbCrSlot &slot : m_ycbcrSlots) {
+		delete[] slot.rgb;
+		slot = YCbCrSlot();
+	}
 }
 
 void MediaEngine::freeVideoFrame() {
@@ -746,6 +804,10 @@ bool MediaEngine::stepVideo(int videoPixelMode, bool skipFrame) {
 
 					sws_scale(m_sws_ctx, m_pFrame->data, m_pFrame->linesize, 0,
 						m_pCodecCtx->height, m_pFrameRGB->data, m_pFrameRGB->linesize);
+
+					// File it under the buffer the game is decoding into, so a later
+					// sceMpegAvcCsc naming that buffer gets this picture and not the newest one.
+					storeYCbCrFrame(videoPixelMode);
 				}
 
 #if LIBAVUTIL_VERSION_MAJOR >= 59
@@ -953,7 +1015,35 @@ int MediaEngine::writeVideoImage(u32 bufferPtr, int frameWidth, int videoPixelMo
 }
 
 int MediaEngine::writeVideoImageWithRange(u32 bufferPtr, int frameWidth, int videoPixelMode,
-	                             int xpos, int ypos, int width, int height) {
+	                             int xpos, int ypos, int width, int height, u32 sourceAddr) {
+	// Pick the picture the game actually asked for. It names one of its own YCbCr buffers, and we
+	// filed our converted pictures under those addresses as they were decoded. Always handing back
+	// the newest one instead shows a movie frame where the game asked for a still image it decoded
+	// seconds ago. Note this has to happen before the clamping below, which needs the dimensions of
+	// the picture we settled on rather than of whatever was decoded last.
+	const u8 *data = nullptr;
+	int srcWidth = 0;
+	int srcHeight = 0;
+	const YCbCrSlot *slot = findYCbCrSlot(sourceAddr);
+	if (slot && slot->pixelMode == videoPixelMode) {
+		data = slot->rgb;
+		srcWidth = slot->width;
+		srcHeight = slot->height;
+	} else {
+#ifdef USE_FFMPEG
+		// Nothing filed under that address, or it was converted in a different pixel format. Fall
+		// back to the newest picture - the old behavior, and still correct for a game that only
+		// ever uses one YCbCr buffer.
+		if (m_pFrameRGB) {
+			data = m_pFrameRGB->data[0];
+			srcWidth = m_desWidth;
+			srcHeight = m_desHeight;
+		}
+#endif
+	}
+	if (!data)
+		return 0;
+
 	int videoLineSize = 0;
 	switch (videoPixelMode) {
 	case GE_CMODE_32BIT_ABGR8888:
@@ -965,12 +1055,12 @@ int MediaEngine::writeVideoImageWithRange(u32 bufferPtr, int frameWidth, int vid
 		videoLineSize = frameWidth * sizeof(u16);
 		break;
 	}
-	// Clamp the requested range to what the decoded frame actually holds *before* computing the
-	// size. The loops below only write the clamped number of lines, so computing the size from the
-	// unclamped height would over-report how much of the destination we touched, and the caller
-	// hands that size straight to the GPU as "this is all fresh video data".
-	width = std::min(width, m_desWidth - xpos);
-	height = std::min(height, m_desHeight - ypos);
+	// Clamp the requested range to what the picture actually holds *before* computing the size. The
+	// loops below only write the clamped number of lines, so computing the size from the unclamped
+	// height would over-report how much of the destination we touched, and the caller hands that
+	// size straight to the GPU as "this is all fresh video data".
+	width = std::min(width, srcWidth - xpos);
+	height = std::min(height, srcHeight - ypos);
 	if (width <= 0 || height <= 0) {
 		// Nothing of the frame falls inside the requested range.
 		return 0;
@@ -987,15 +1077,8 @@ int MediaEngine::writeVideoImageWithRange(u32 bufferPtr, int frameWidth, int vid
 	u8 *buffer = Memory::GetPointerWriteUnchecked(bufferPtr);
 
 #ifdef USE_FFMPEG
-	// Only m_pFrameRGB matters here - we read the already converted picture out of it and never
-	// touch the decoder's own frame. Requiring m_pFrame too would make a perfectly good frame
-	// unusable for every sceMpegAvcCsc between a stream reload and the next successful decode.
-	if (!m_pFrameRGB)
-		return 0;
-
 	// lock the image size
 	u8 *imgbuf = buffer;
-	const u8 *data = m_pFrameRGB->data[0];
 
 	bool swizzle = Memory::IsVRAMAddress(bufferPtr) && (bufferPtr & 0x00200000) == 0x00200000;
 	if (swizzle) {
@@ -1006,37 +1089,37 @@ int MediaEngine::writeVideoImageWithRange(u32 bufferPtr, int frameWidth, int vid
 
 	switch (videoPixelMode) {
 	case GE_CMODE_32BIT_ABGR8888:
-		data += (ypos * m_desWidth + xpos) * sizeof(u32);
+		data += (ypos * srcWidth + xpos) * sizeof(u32);
 		for (int y = 0; y < height; y++) {
 			writeVideoLineRGBA(imgbuf, data, width);
-			data += m_desWidth * sizeof(u32);
+			data += srcWidth * sizeof(u32);
 			imgbuf += videoLineSize;
 		}
 		break;
 
 	case GE_CMODE_16BIT_BGR5650:
-		data += (ypos * m_desWidth + xpos) * sizeof(u16);
+		data += (ypos * srcWidth + xpos) * sizeof(u16);
 		for (int y = 0; y < height; y++) {
 			writeVideoLineABGR5650(imgbuf, data, width);
-			data += m_desWidth * sizeof(u16);
+			data += srcWidth * sizeof(u16);
 			imgbuf += videoLineSize;
 		}
 		break;
 
 	case GE_CMODE_16BIT_ABGR5551:
-		data += (ypos * m_desWidth + xpos) * sizeof(u16);
+		data += (ypos * srcWidth + xpos) * sizeof(u16);
 		for (int y = 0; y < height; y++) {
 			writeVideoLineABGR5551(imgbuf, data, width);
-			data += m_desWidth * sizeof(u16);
+			data += srcWidth * sizeof(u16);
 			imgbuf += videoLineSize;
 		}
 		break;
 
 	case GE_CMODE_16BIT_ABGR4444:
-		data += (ypos * m_desWidth + xpos) * sizeof(u16);
+		data += (ypos * srcWidth + xpos) * sizeof(u16);
 		for (int y = 0; y < height; y++) {
 			writeVideoLineABGR4444(imgbuf, data, width);
-			data += m_desWidth * sizeof(u16);
+			data += srcWidth * sizeof(u16);
 			imgbuf += videoLineSize;
 		}
 		break;

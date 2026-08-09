@@ -78,10 +78,15 @@ public:
 	int getRemainSize();
 	int getAudioRemainSize();
 
+	// Which of the game's YCbCr buffers the next stepVideo() is decoding into. sceMpegAvcDecodeYCbCr
+	// names one, and sceMpegAvcCsc later names the one it wants converted - they are not always the
+	// same buffer, so we have to keep them apart.
+	void SetYCbCrTarget(u32 addr) { m_ycbcrTarget = addr; }
+
 	bool stepVideo(int videoPixelMode, bool skipFrame = false);
 	int writeVideoImage(u32 bufferPtr, int frameWidth = 512, int videoPixelMode = 3);
 	int writeVideoImageWithRange(u32 bufferPtr, int frameWidth, int videoPixelMode,
-	                             int xpos, int ypos, int width, int height);
+	                             int xpos, int ypos, int width, int height, u32 sourceAddr);
 	int getAudioSamples(u32 bufferPtr);
 
 	s64 getVideoTimeStamp();
@@ -97,10 +102,30 @@ public:
 	void DoState(PointerWrap &p);
 
 private:
+	// One converted picture, filed under the game's YCbCr buffer it was decoded into. We can't
+	// emulate the real YCbCr memory layout, but a game that rotates between several buffers still
+	// expects sceMpegAvcCsc to convert the one it names - handing back the newest picture instead
+	// shows a movie frame where the game asked for a still image it decoded seconds ago.
+	struct YCbCrSlot {
+		u32 addr = 0;  // the game's buffer address, 0 while the slot is unused
+		u8 *rgb = nullptr;
+		size_t size = 0;  // bytes allocated, may exceed what the current picture needs
+		int width = 0;
+		int height = 0;
+		int pixelMode = -1;
+		u64 lastUsed = 0;
+	};
+	static constexpr int MAX_YCBCR_SLOTS = 6;
+
 	bool SetupStreams();
 	bool setVideoDim(int width = 0, int height = 0);
 	void updateSwsFormat(int videoPixelMode);
 	int getNextAudioFrame(u8 **buf, int *headerCode1, int *headerCode2);
+
+	// Files the freshly converted m_pFrameRGB under the buffer SetYCbCrTarget() named.
+	void storeYCbCrFrame(int videoPixelMode);
+	const YCbCrSlot *findYCbCrSlot(u32 addr) const;
+	void freeYCbCrSlots();
 
 	static int MpegReadbuffer(void *opaque, uint8_t *buf, int buf_size);
 
@@ -125,6 +150,10 @@ public:  // TODO: Very little of this below should be public.
 	bool m_isVideoEnd = false;
 
 private:
+	YCbCrSlot m_ycbcrSlots[MAX_YCBCR_SLOTS];
+	u64 m_ycbcrTick = 0;  // bumped on every store, so the oldest slot is the one to recycle
+	u32 m_ycbcrTarget = 0;
+
 #ifdef USE_FFMPEG
 	// Video ffmpeg context - not used for audio
 	AVFormatContext *m_pFormatCtx = nullptr;

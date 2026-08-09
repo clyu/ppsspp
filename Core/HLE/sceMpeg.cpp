@@ -1270,6 +1270,10 @@ static int sceMpegAvcDecodeYCbCr(u32 mpeg, u32 auAddr, u32 bufferAddr, u32 initA
 	u32 init = Memory::Read_U32(initAddr);
 	DEBUG_LOG(Log::Mpeg, "*buffer = %08x, *init = %08x", buffer, init);
 
+	// Tell the media engine which of the game's YCbCr buffers this frame belongs to, so that a
+	// later sceMpegAvcCsc naming that buffer gets this picture back rather than the newest one.
+	ctx->mediaengine->SetYCbCrTarget(buffer);
+
 	if (ctx->mediaengine->stepVideo(ctx->videoPixelMode)) {
 		// Don't draw here, we'll draw in the Csc func.
 		ctx->avc.avcFrameStatus = 1;
@@ -1924,7 +1928,7 @@ static u32 sceMpegAvcCsc(u32 mpeg, u32 sourceAddr, u32 rangeAddr, int frameWidth
 		return SCE_KERNEL_ERROR_INVALID_VALUE;
 	}
 
-	int destSize = ctx->mediaengine->writeVideoImageWithRange(destAddr, frameWidth, ctx->videoPixelMode, x, y, width, height);
+	int destSize = ctx->mediaengine->writeVideoImageWithRange(destAddr, frameWidth, ctx->videoPixelMode, x, y, width, height, sourceAddr);
 	if (destSize > 0) {
 		// Only tell the GPU about it if we actually wrote something - a zero size would make
 		// PerformWriteFormattedFromMemory compute a zero height if it decides to resize.
