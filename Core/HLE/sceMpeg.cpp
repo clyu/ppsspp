@@ -1100,6 +1100,11 @@ static u32 sceMpegAvcDecode(u32 mpeg, u32 auAddr, u32 frameWidth, u32 bufferAddr
 
 	int accumDelay = 0;
 
+	// This path draws immediately and is never asked for a picture by address later, so keep it out
+	// of the YCbCr slots - filing it would let it overwrite whichever buffer the YCbCr path named
+	// last, for a game that happens to use both.
+	ctx->mediaengine->SetYCbCrTarget(0);
+
 	if (ispmp){
 #ifdef USE_FFMPEG
 		while (pmp_queue.size() != 0){
