@@ -129,6 +129,32 @@ static int getPixelFormatBytes(int pspFormat)
 	}
 }
 
+// Same set as above, for the one caller that has to check before asking - a pixel format read back
+// from a savestate can be anything at all, and getPixelFormatBytes() would log and guess 4.
+static bool isValidPixelFormat(int pspFormat)
+{
+	switch (pspFormat)
+	{
+	case GE_CMODE_16BIT_BGR5650:
+	case GE_CMODE_16BIT_ABGR5551:
+	case GE_CMODE_16BIT_ABGR4444:
+	case GE_CMODE_32BIT_ABGR8888:
+		return true;
+
+	default:
+		return false;
+	}
+}
+
+#ifdef USE_FFMPEG
+// True when ffmpeg handed us this picture only because we asked for corrupt output: the decoder has
+// not reached a recovery point yet, so macroblocks are missing or concealed. h264dec.c sets the flag
+// in exactly that case, which is what a decoder resuming mid-stream produces.
+static bool frameIsCorrupt(const AVFrame *frame) {
+	return (frame->flags & AV_FRAME_FLAG_CORRUPT) != 0;
+}
+#endif
+
 MediaEngine::MediaEngine() {
 	m_bufSize = 0x2000;
 
@@ -155,7 +181,7 @@ void MediaEngine::closeMedia() {
 }
 
 void MediaEngine::DoState(PointerWrap &p) {
-	auto s = p.Section("MediaEngine", 1, 7);
+	auto s = p.Section("MediaEngine", 1, 8);
 	if (!s)
 		return;
 
@@ -221,6 +247,109 @@ void MediaEngine::DoState(PointerWrap &p) {
 	} else {
 		m_audioType = PSP_CODEC_AT3PLUS;
 	}
+
+#ifdef USE_FFMPEG
+	// The loose "newest picture" that writeVideoImage() draws from belongs to the state we are
+	// leaving behind, no matter which version that state was written by. The allocation can stay -
+	// it gets rebuilt on the next decode either way - but nothing may read it until a decode
+	// belonging to the state we just loaded has filled it in. Note that openContext() above does
+	// not necessarily settle this for us: setVideoDim() bails out before freeVideoFrame() while the
+	// codec still reports 0x0, and a state saved with no open context never gets there at all.
+	if (p.mode == p.MODE_READ) {
+		m_frameRGBValid = false;
+	}
+#endif
+
+	// The pictures the game can still ask for by address are part of the machine state. Nothing
+	// above restores them: openContext() only rebuilds the decoder, and it resumes mid-stream with
+	// no reference frames, so the first thing it produces is a partial picture. A game showing a
+	// still image decoded it once and then just re-issues sceMpegAvcCsc every frame, so without the
+	// pictures in the state there is nothing correct to hand back.
+	if (s >= 8) {
+		DoStateYCbCrSlots(p);
+	} else if (p.mode == p.MODE_READ) {
+		// A state this old carries no pictures at all, so there is nothing to take their place.
+		freeYCbCrSlots();
+		m_ycbcrTick = 0;
+		m_ycbcrTarget = 0;
+	}
+}
+
+void MediaEngine::DoStateYCbCrSlots(PointerWrap &p) {
+	if (p.mode == p.MODE_READ) {
+		// Anything we are holding belongs to the state we are leaving behind. (DoState() has
+		// already dropped the loose "newest picture" for the same reason.)
+		freeYCbCrSlots();
+
+		u32 count = 0;
+		Do(p, count);
+		for (u32 i = 0; i < count; i++) {
+			u32 addr = 0;
+			int width = 0, height = 0, pixelMode = -1;
+			u64 lastUsed = 0;
+			u32 size = 0;
+			Do(p, addr);
+			Do(p, width);
+			Do(p, height);
+			Do(p, pixelMode);
+			Do(p, lastUsed);
+			Do(p, size);
+			// A state written by a build with more slots than we have must still load, so read the
+			// picture data either way and only then decide whether there is room to keep it.
+			u8 *rgb = size != 0 ? new u8[size] : nullptr;
+			if (rgb)
+				DoArray(p, rgb, (int)size);
+
+			// The geometry and the byte count are separate fields, but writeVideoImageWithRange()
+			// walks the picture purely by width/height/pixelMode and never consults size. If a
+			// state has them disagreeing it would read past the allocation, so only keep a slot
+			// that is self-consistent. The u64 keeps a bogus width/height from wrapping the
+			// product, and size being u32 then bounds the dimensions on its own.
+			const bool usable = rgb != nullptr && addr != 0 && width > 0 && height > 0 &&
+				isValidPixelFormat(pixelMode) &&
+				(u64)size >= (u64)width * height * getPixelFormatBytes(pixelMode);
+			if (rgb && !usable) {
+				WARN_LOG(Log::ME, "Dropping inconsistent YCbCr slot from savestate: %08x %dx%d fmt %d, %d bytes",
+					addr, width, height, pixelMode, size);
+			}
+			if (i < MAX_YCBCR_SLOTS && usable) {
+				YCbCrSlot &slot = m_ycbcrSlots[i];
+				slot.addr = addr;
+				slot.rgb = rgb;
+				slot.size = size;
+				slot.width = width;
+				slot.height = height;
+				slot.pixelMode = pixelMode;
+				slot.lastUsed = lastUsed;
+			} else {
+				delete[] rgb;
+			}
+		}
+	} else {
+		u32 count = 0;
+		for (const YCbCrSlot &slot : m_ycbcrSlots) {
+			if (slot.addr != 0 && slot.rgb)
+				count++;
+		}
+		Do(p, count);
+		for (YCbCrSlot &slot : m_ycbcrSlots) {
+			if (slot.addr == 0 || !slot.rgb)
+				continue;
+			// Store only the part the picture occupies - a recycled slot can still be sized for a
+			// larger one it held earlier.
+			u32 size = (u32)std::min(slot.size,
+				(size_t)slot.width * slot.height * getPixelFormatBytes(slot.pixelMode));
+			Do(p, slot.addr);
+			Do(p, slot.width);
+			Do(p, slot.height);
+			Do(p, slot.pixelMode);
+			Do(p, slot.lastUsed);
+			Do(p, size);
+			DoArray(p, slot.rgb, (int)size);
+		}
+	}
+	Do(p, m_ycbcrTick);
+	Do(p, m_ycbcrTarget);
 }
 
 int MediaEngine::MpegReadbuffer(void *opaque, uint8_t *buf, int buf_size) {
@@ -394,7 +523,7 @@ void MediaEngine::closeContext() {
 #endif
 }
 
-void MediaEngine::storeYCbCrFrame(int videoPixelMode) {
+void MediaEngine::storeYCbCrFrame(int videoPixelMode, bool corrupt) {
 #ifdef USE_FFMPEG
 	// No target means the caller went through the direct sceMpegAvcDecode path, which draws
 	// immediately and never asks for a picture by address - nothing to file.
@@ -404,15 +533,37 @@ void MediaEngine::storeYCbCrFrame(int videoPixelMode) {
 	// stepVideo() just set linesize to exactly this, so the picture is tightly packed.
 	const size_t need = (size_t)m_desWidth * m_desHeight * getPixelFormatBytes(videoPixelMode);
 
+	// An exact address match wins over an unused slot, otherwise a game could end up with the same
+	// buffer filed twice and sceMpegAvcCsc picking whichever copy came first.
 	YCbCrSlot *slot = nullptr;
+	YCbCrSlot *unused = nullptr;
+	YCbCrSlot *oldest = nullptr;
 	for (YCbCrSlot &candidate : m_ycbcrSlots) {
-		if (candidate.addr == m_ycbcrTarget || candidate.addr == 0) {
+		if (candidate.addr == m_ycbcrTarget) {
 			slot = &candidate;
 			break;
 		}
+		if (!unused && candidate.addr == 0)
+			unused = &candidate;
 		// Fall back to recycling whichever slot has gone unused the longest.
-		if (!slot || candidate.lastUsed < slot->lastUsed)
-			slot = &candidate;
+		if (!oldest || candidate.lastUsed < oldest->lastUsed)
+			oldest = &candidate;
+	}
+	if (!slot)
+		slot = unused ? unused : oldest;
+
+	// We ask the decoder for corrupt frames on purpose (AV_CODEC_FLAG_OUTPUT_CORRUPT, so that a
+	// game feeding us partial data still gets something), but a half-decoded picture must not
+	// displace a good one we already hold for this buffer. That is exactly what happens right after
+	// a savestate load: the rebuilt H.264 decoder resumes mid-stream with no reference frames and
+	// concealed macroblock rows, and since slices decode top-down the damage lands at the top of
+	// the picture. The game's own YCbCr buffer survived the save/load, so on hardware it would keep
+	// showing the picture it decoded before the state was saved - keep ours too, and let the first
+	// clean frame take over.
+	if (corrupt && slot->addr == m_ycbcrTarget && slot->rgb) {
+		slot->lastUsed = ++m_ycbcrTick;
+		m_ycbcrTarget = 0;
+		return;
 	}
 
 	if (slot->size < need) {
@@ -457,6 +608,7 @@ void MediaEngine::freeVideoFrame() {
 		av_frame_free(&m_pFrameRGB);
 	if (m_buffer)
 		av_free(m_buffer);
+	m_frameRGBValid = false;
 #endif
 	m_buffer = nullptr;
 }
@@ -804,10 +956,11 @@ bool MediaEngine::stepVideo(int videoPixelMode, bool skipFrame) {
 
 					sws_scale(m_sws_ctx, m_pFrame->data, m_pFrame->linesize, 0,
 						m_pCodecCtx->height, m_pFrameRGB->data, m_pFrameRGB->linesize);
+					m_frameRGBValid = true;
 
 					// File it under the buffer the game is decoding into, so a later
 					// sceMpegAvcCsc naming that buffer gets this picture and not the newest one.
-					storeYCbCrFrame(videoPixelMode);
+					storeYCbCrFrame(videoPixelMode, frameIsCorrupt(m_pFrame));
 				}
 
 #if LIBAVUTIL_VERSION_MAJOR >= 59
@@ -949,7 +1102,7 @@ int MediaEngine::writeVideoImage(u32 bufferPtr, int frameWidth, int videoPixelMo
 	u8 *buffer = Memory::GetPointerWriteUnchecked(bufferPtr);
 
 #ifdef USE_FFMPEG
-	if (!m_pFrame || !m_pFrameRGB)
+	if (!m_pFrame || !m_pFrameRGB || !m_frameRGBValid)
 		return 0;
 
 	// lock the image size
@@ -1033,8 +1186,10 @@ int MediaEngine::writeVideoImageWithRange(u32 bufferPtr, int frameWidth, int vid
 #ifdef USE_FFMPEG
 		// Nothing filed under that address, or it was converted in a different pixel format. Fall
 		// back to the newest picture - the old behavior, and still correct for a game that only
-		// ever uses one YCbCr buffer.
-		if (m_pFrameRGB) {
+		// ever uses one YCbCr buffer. Only if one was actually decoded, though: on the savestate
+		// load path the buffer can be allocated but never written, and blitting it would put raw
+		// heap contents on screen.
+		if (m_pFrameRGB && m_frameRGBValid) {
 			data = m_pFrameRGB->data[0];
 			srcWidth = m_desWidth;
 			srcHeight = m_desHeight;
@@ -1149,6 +1304,11 @@ int MediaEngine::writeVideoImageWithRange(u32 bufferPtr, int frameWidth, int vid
 
 u8 *MediaEngine::getFrameImage() {
 #ifdef USE_FFMPEG
+	// Same rule as writeVideoImage(): the buffer behind m_pFrameRGB comes from av_malloc, and
+	// openContext() can allocate it without a single decode having filled it in - handing that out
+	// would let the caller copy raw heap contents into the game's memory.
+	if (!m_pFrameRGB || !m_frameRGBValid)
+		return nullptr;
 	return m_pFrameRGB->data[0];
 #else
 	return nullptr;

@@ -74,6 +74,7 @@ public:
 	// TODO: Return false if the stream doesn't exist.
 	bool setAudioStream(int streamNum) { m_audioStream = streamNum; return true; }
 
+	// The newest converted picture, or nullptr when no decode has produced one yet.
 	u8 *getFrameImage();
 	int getRemainSize();
 	int getAudioRemainSize();
@@ -122,10 +123,12 @@ private:
 	void updateSwsFormat(int videoPixelMode);
 	int getNextAudioFrame(u8 **buf, int *headerCode1, int *headerCode2);
 
-	// Files the freshly converted m_pFrameRGB under the buffer SetYCbCrTarget() named.
-	void storeYCbCrFrame(int videoPixelMode);
+	// Files the freshly converted m_pFrameRGB under the buffer SetYCbCrTarget() named. A frame the
+	// decoder flagged as corrupt never displaces a picture we already hold for that buffer.
+	void storeYCbCrFrame(int videoPixelMode, bool corrupt);
 	const YCbCrSlot *findYCbCrSlot(u32 addr) const;
 	void freeYCbCrSlots();
+	void DoStateYCbCrSlots(PointerWrap &p);
 
 	static int MpegReadbuffer(void *opaque, uint8_t *buf, int buf_size);
 
@@ -135,6 +138,11 @@ public:  // TODO: Very little of this below should be public.
 	std::map<int, AVCodecContext *> m_pCodecCtxs;
 	AVFrame *m_pFrame = nullptr;
 	AVFrame *m_pFrameRGB = nullptr;
+	// m_pFrameRGB's backing store comes from av_malloc, so a freshly allocated one holds whatever
+	// was on the heap. Nothing may be read out of it before a decode has actually filled it in -
+	// after a savestate load in particular, the game keeps asking for pictures long before the
+	// rebuilt decoder has produced one.
+	bool m_frameRGBValid = false;
 #endif
 
 	u8 *m_buffer = nullptr;
