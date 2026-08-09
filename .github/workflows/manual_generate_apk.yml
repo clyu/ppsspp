@@ -33,7 +33,7 @@ jobs:
         run: |
           echo "count=$(git tag -l 'v[0-9]*' | wc -l | tr -d ' ')" >> $GITHUB_OUTPUT
 
-      - name: Fetch upstream tags # required for git describe to return a valid version and to preevnt androidGitVersion from crashing on a new fork
+      - name: Fetch upstream tags # required for git describe to return a valid version, otherwise the APK version falls back to v0.0.0 on a new fork
         if: steps.valid-tags.outputs.count == '0'
         run: |
           # TODO: should try to fetch tags from whereever this repo was forked from before fetching from official repo
@@ -55,24 +55,20 @@ jobs:
       #  with:
       #    ndk-version: r21e
 
-      - name: Test androidGitVersion
+      - name: Assemble APK # only arm64-v8a, building every ABI takes far too long on a hosted runner
         run: |
-          echo "count=${{steps.valid-tags.outputs.count}}"
-          gradle --quiet androidGitVersion
-      
-      - name: Assemble APK
-        run: ./gradlew assemble${{ github.event.inputs.buildVariant }} --stacktrace
+          echo "Valid version tags: ${{ steps.valid-tags.outputs.count }}"
+          ./gradlew assemble${{ github.event.inputs.buildVariant }} -Pandroid.injected.build.abi=arm64-v8a --stacktrace
       
       #- name: Gradle Test
       #  run: bash ./gradlew test${{ github.event.inputs.buildVariant }}UnitTest --stacktrace
       
       - name: Package build
         run: |
-          find . -name "*.apk"
           mkdir ppsspp
-          if [ -e android/build/*/apk/*/*/*.apk ]; then
-            cp android/build/*/apk/*/*/*.apk ppsspp/
-          fi
+          find android/build -name "*.apk" -exec cp -v '{}' ppsspp/ \;
+          ls -l ppsspp/
+          [ -n "$(ls -A ppsspp)" ] || { echo "::error::No APK was produced"; exit 1; }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
