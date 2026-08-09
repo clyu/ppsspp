@@ -1482,7 +1482,10 @@ static u32 sceMpegRingbufferPut(u32 ringbufferAddr, int numPackets, int availabl
 	// Seems still need to check actual available, Patapon 3 for example.
 	numPackets = std::min(numPackets, ringbuffer->packets - ringbuffer->packetsAvail);
 	if (numPackets <= 0) {
-		return hleLogDebug(Log::Mpeg, 0, "no packets to enqueue");
+		// Games poll this against a full ringbuffer, so it fires constantly and drowns out the rest
+		// of the channel at debug level. sceMpegRingbufferAvailableSize already reports the same
+		// thing right before it, so there's nothing to learn here.
+		return hleNoLog(0);
 	}
 
 	MpegContext *ctx = getMpegCtx(ringbuffer->mpeg);
@@ -1919,7 +1922,9 @@ static u32 sceMpegAvcCsc(u32 mpeg, u32 sourceAddr, u32 rangeAddr, int frameWidth
 	// If do not use DelayResult,Wil cause flickering in Dengeki no Pilot: Tenkuu no Kizuna
 	// https://github.com/hrydgard/ppsspp/issues/7549
 
-	return hleDelayResult(hleLogDebug(Log::Mpeg, 0), "mpeg avc csc", avcCscDelayMs);
+	// Called once per displayed frame with the same arguments and the same result, so at debug level
+	// this buries everything else on the Mpeg channel without ever saying anything new.
+	return hleDelayResult(hleNoLog(0), "mpeg avc csc", avcCscDelayMs);
 }
 
 static u32 sceMpegRingbufferDestruct(u32 ringbufferAddr) {
