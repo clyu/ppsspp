@@ -795,7 +795,7 @@ bool MediaEngine::setVideoStream(int streamNum, bool force) {
 	return true;
 }
 
-bool MediaEngine::setVideoDim(int width, int height)
+bool MediaEngine::setVideoDim()
 {
 #ifdef USE_FFMPEG
 	auto codecIter = m_pCodecCtxs.find(m_videoStream);
@@ -803,18 +803,9 @@ bool MediaEngine::setVideoDim(int width, int height)
 		return false;
 	AVCodecContext *m_pCodecCtx = codecIter->second;
 
-	int desWidth, desHeight;
-	if (width == 0 && height == 0)
-	{
-		// use the orignal video size
-		desWidth = m_pCodecCtx->width;
-		desHeight = m_pCodecCtx->height;
-	}
-	else
-	{
-		desWidth = width;
-		desHeight = height;
-	}
+	// Use the original video size. See the header for why there is no override.
+	const int desWidth = m_pCodecCtx->width;
+	const int desHeight = m_pCodecCtx->height;
 
 	// Allocate video frame
 	if (!m_pFrame) {
@@ -944,7 +935,9 @@ bool MediaEngine::stepVideo(int videoPixelMode, bool skipFrame) {
 			if (frameFinished) {
 				// "We already have one" isn't enough any more - m_pFrameRGB now outlives a stream
 				// reload, so it may still be sized for the previous stream. Rebuild it whenever it
-				// doesn't match what the decoder is actually handing us.
+				// doesn't match what the decoder is actually handing us. setVideoDim() always sizes
+				// to the codec, so this comparison settles on the first rebuild rather than firing
+				// again on every frame.
 				if (!m_pFrameRGB || m_desWidth != m_pCodecCtx->width || m_desHeight != m_pCodecCtx->height) {
 					setVideoDim();
 				}

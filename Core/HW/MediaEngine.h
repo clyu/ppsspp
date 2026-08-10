@@ -119,7 +119,11 @@ private:
 	static constexpr int MAX_YCBCR_SLOTS = 6;
 
 	bool SetupStreams();
-	bool setVideoDim(int width = 0, int height = 0);
+	// Sizes m_desWidth/m_desHeight and the frame buffer behind them to whatever the decoder is
+	// producing. Deliberately takes no override: stepVideo() decides whether the frame it is
+	// holding is still the right shape by comparing those two against the codec, so a size that
+	// disagreed with the codec would make that mismatch permanent.
+	bool setVideoDim();
 	void updateSwsFormat(int videoPixelMode);
 	int getNextAudioFrame(u8 **buf, int *headerCode1, int *headerCode2);
 
