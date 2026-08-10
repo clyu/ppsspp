@@ -98,8 +98,13 @@ static const int MPEG_HEADER_BUFFER_MINIMUM_SIZE = 2048;
 // For PMP media
 static u32 pmp_videoSource = 0; //pointer to the video source (SceMpegLLi structure)
 static int pmp_nBlocks = 0; //number of blocks received in the last sceMpegBasePESpacketCopy call
+// Number of pmp video frames decoded but not yet played. This used to be a list of AVFrame*, but
+// every entry was MediaEngine::m_pFrameRGB - decodePmpVideo() converts into that one frame and
+// pushed it, so the list only ever held the same pointer over and over. It gave the queue a second
+// claim on a frame MediaEngine owns and releases in freeVideoFrame(), which is how emptying the
+// queue left m_pFrameRGB dangling. A count carries the same information with no ownership at all.
 #ifdef USE_FFMPEG
-static std::list<AVFrame*> pmp_queue; //list of pmp video frames have been decoded and will be played
+static int pmp_queuedFrames = 0;
 #endif
 static std::list<u32> pmp_ContextList; //list of pmp media contexts
 static bool pmp_oldStateLoaded = false; // for dostate
@@ -996,8 +1001,9 @@ static bool decodePmpVideo(PSPPointer<SceMpegRingBuffer> ringbuffer, u32 pmpctxA
 			else
 				mediaengine->m_videopts += ptsDuration;
 
-			// push the decoded frame into pmp_queue
-			pmp_queue.push_back(pFrameRGB);
+			// The converted picture is sitting in mediaengine->m_pFrameRGB - just record that one
+			// more is waiting to be played.
+			pmp_queuedFrames++;
 
 			// write frame into ppm file
 			// SaveFrame(pNewFrameRGB, pCodecCtx->width, pCodecCtx->height);
@@ -1028,11 +1034,10 @@ void __VideoPmpInit() {
 
 void __VideoPmpShutdown() {
 #ifdef USE_FFMPEG
-	// We need to empty pmp_queue to not leak memory.
-	for (auto it = pmp_queue.begin(); it != pmp_queue.end(); ++it){
-		av_free(*it);
-	}
-	pmp_queue.clear();
+	// Nothing to free here: the decoded pictures live in MediaEngine::m_pFrameRGB, which the media
+	// engine allocates and releases itself (freeVideoFrame(), from the destructor and from anything
+	// that reallocates the frame). Dropping the pending count is all this owns.
+	pmp_queuedFrames = 0;
 	pmp_ContextList.clear();
 	delete pmpframes;
 	pmpframes = NULL;
@@ -1107,19 +1112,19 @@ static u32 sceMpegAvcDecode(u32 mpeg, u32 auAddr, u32 frameWidth, u32 bufferAddr
 
 	if (ispmp){
 #ifdef USE_FFMPEG
-		while (pmp_queue.size() != 0){
-			// playing all pmp_queue frames
-			ctx->mediaengine->m_pFrameRGB = pmp_queue.front();
-			// decodePmpVideo() already converted this one, so it is safe to read out.
+		while (pmp_queuedFrames > 0){
+			// Play the pictures decodePmpVideo() left in m_pFrameRGB. It converted into that one
+			// frame, so every pending frame is the same picture - the count only decides how many
+			// times we hand it over, exactly as the old list of identical pointers did.
+			// decodePmpVideo() already converted it, so it is safe to read out.
 			ctx->mediaengine->m_frameRGBValid = true;
 			int bufferSize = ctx->mediaengine->writeVideoImage(buffer, frameWidth, ctx->videoPixelMode);
 			gpu->PerformWriteFormattedFromMemory(buffer, bufferSize, frameWidth, (GEBufferFormat)ctx->videoPixelMode);
 			ctx->avc.avcFrameStatus = 1;
 			ctx->videoFrameCount++;
 
-			// free front frame
 			accumDelay += 30;
-			pmp_queue.pop_front();
+			pmp_queuedFrames--;
 		}
 #endif
 	} else if (ctx->mediaengine->stepVideo(ctx->videoPixelMode)) {
