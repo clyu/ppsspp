@@ -1155,6 +1155,10 @@ void hleDoLogInternal(Log t, LogLevel level, u64 res, const char *file, int line
 			errStr = nullptr;  // We check errstr later to determine which format to use.
 		}
 		break;
+	case 'X':
+		// 64-bit value, no error codes to look up.
+		fmt = "%s%016llx=%s(%s)%s";
+		break;
 	case 'i':
 	case 'I':
 		if ((int)res < 0 && (errStr = KernelErrorToString((u32)res))) {
