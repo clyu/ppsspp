@@ -1125,7 +1125,10 @@ static u32 sceMpegAvcDecode(u32 mpeg, u32 auAddr, u32 frameWidth, u32 bufferAddr
 			// decodePmpVideo() already converted it, so it is safe to read out.
 			ctx->mediaengine->m_frameRGBValid = true;
 			int bufferSize = ctx->mediaengine->writeVideoImage(buffer, frameWidth, ctx->videoPixelMode);
-			gpu->PerformWriteFormattedFromMemory(buffer, bufferSize, frameWidth, (GEBufferFormat)ctx->videoPixelMode);
+			// Only tell the GPU about it if we actually wrote something - see sceMpegAvcCsc().
+			if (bufferSize > 0) {
+				gpu->PerformWriteFormattedFromMemory(buffer, bufferSize, frameWidth, (GEBufferFormat)ctx->videoPixelMode);
+			}
 			ctx->avc.avcFrameStatus = 1;
 			ctx->videoFrameCount++;
 
@@ -1135,7 +1138,10 @@ static u32 sceMpegAvcDecode(u32 mpeg, u32 auAddr, u32 frameWidth, u32 bufferAddr
 #endif
 	} else if (ctx->mediaengine->stepVideo(ctx->videoPixelMode)) {
 		int bufferSize = ctx->mediaengine->writeVideoImage(buffer, frameWidth, ctx->videoPixelMode);
-		gpu->PerformWriteFormattedFromMemory(buffer, bufferSize, frameWidth, (GEBufferFormat)ctx->videoPixelMode);
+		// Only tell the GPU about it if we actually wrote something - see sceMpegAvcCsc().
+		if (bufferSize > 0) {
+			gpu->PerformWriteFormattedFromMemory(buffer, bufferSize, frameWidth, (GEBufferFormat)ctx->videoPixelMode);
+		}
 		ctx->avc.avcFrameStatus = 1;
 		ctx->videoFrameCount++;
 	} else {

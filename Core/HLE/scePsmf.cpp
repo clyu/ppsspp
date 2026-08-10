@@ -1587,7 +1587,11 @@ static int scePsmfPlayerGetVideoData(u32 psmfPlayer, u32 videoDataAddr)
 	int bufw = videoData->frameWidth == 0 ? 512 : videoData->frameWidth & ~1;
 	// Always write the video frame, even after the video has ended.
 	int displaybufSize = psmfplayer->mediaengine->writeVideoImage(videoData->displaybuf, bufw, videoPixelMode);
-	gpu->PerformWriteFormattedFromMemory(videoData->displaybuf, displaybufSize, bufw, (GEBufferFormat)videoPixelMode);
+	// Only tell the GPU about it if we actually wrote something - a zero size would make
+	// PerformWriteFormattedFromMemory compute a zero height if it decides to resize.
+	if (displaybufSize > 0) {
+		gpu->PerformWriteFormattedFromMemory(videoData->displaybuf, displaybufSize, bufw, (GEBufferFormat)videoPixelMode);
+	}
 	__PsmfUpdatePts(psmfplayer, videoData);
 
 	_PsmfPlayerFillRingbuffer(psmfplayer);

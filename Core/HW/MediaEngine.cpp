@@ -1105,7 +1105,11 @@ int MediaEngine::writeVideoImage(u32 bufferPtr, int frameWidth, int videoPixelMo
 	u8 *buffer = Memory::GetPointerWriteUnchecked(bufferPtr);
 
 #ifdef USE_FFMPEG
-	if (!m_pFrame || !m_pFrameRGB || !m_frameRGBValid)
+	// Only m_pFrameRGB matters - everything below reads the already converted picture out of it and
+	// never touches the decoder's own frame. m_pFrame is one of the things closeContext() does still
+	// free, so requiring it here would keep returning 0 for every decode between a stream reload and
+	// the next successful one, which is exactly the window m_pFrameRGB is kept alive to cover.
+	if (!m_pFrameRGB || !m_frameRGBValid)
 		return 0;
 
 	// lock the image size
