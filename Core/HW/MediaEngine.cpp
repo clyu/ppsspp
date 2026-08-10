@@ -470,6 +470,10 @@ bool MediaEngine::openContext(bool keepReadPos) {
 	if (!setVideoStream(m_videoStream, true))
 		return false;
 
+	// Failure is the normal case here and deliberately ignored: for H.264 the codec reports 0x0
+	// until the SPS has been parsed, which does not happen until the first frame is decoded. That
+	// is why stepVideo() re-checks the dimensions on every decoded frame - it is the one that has
+	// to care whether the frame buffer really got built.
 	setVideoDim();
 	m_audioContext = CreateAudioDecoder((PSPAudioType)m_audioType);
 	m_isVideoEnd = false;
@@ -938,10 +942,16 @@ bool MediaEngine::stepVideo(int videoPixelMode, bool skipFrame) {
 				// doesn't match what the decoder is actually handing us. setVideoDim() always sizes
 				// to the codec, so this comparison settles on the first rebuild rather than firing
 				// again on every frame.
-				if (!m_pFrameRGB || m_desWidth != m_pCodecCtx->width || m_desHeight != m_pCodecCtx->height) {
-					setVideoDim();
+				bool frameRGBReady = m_pFrameRGB && m_desWidth == m_pCodecCtx->width && m_desHeight == m_pCodecCtx->height;
+				if (!frameRGBReady) {
+					// Take the result rather than re-testing m_pFrameRGB: setVideoDim() tears the
+					// sws context down before the point where it can give up, and it leaves any
+					// frame we were already holding alone, so a non-null m_pFrameRGB says nothing
+					// about whether the rebuild worked. Falling through on a failed one would hand
+					// sws_scale() a null context.
+					frameRGBReady = setVideoDim();
 				}
-				if (m_pFrameRGB && !skipFrame) {
+				if (frameRGBReady && !skipFrame) {
 					updateSwsFormat(videoPixelMode);
 					// TODO: Technically we could set this to frameWidth instead of m_desWidth for better perf.
 					// Update the linesize for the new format too.  We started with the largest size, so it should fit.
