@@ -127,9 +127,11 @@ private:
 	void updateSwsFormat(int videoPixelMode);
 	int getNextAudioFrame(u8 **buf, int *headerCode1, int *headerCode2);
 
-	// Files the freshly converted m_pFrameRGB under the buffer SetYCbCrTarget() named. A frame the
-	// decoder flagged as corrupt never displaces a picture we already hold for that buffer.
-	void storeYCbCrFrame(int videoPixelMode, bool corrupt);
+	// Picks the slot this decode should land in, under the buffer SetYCbCrTarget() named, and sizes
+	// it so sws_scale() can convert straight into it. Returns null when the picture should not be
+	// filed - either nothing named a target, or the decoder flagged the frame as corrupt and we
+	// already hold a good picture for that buffer, which a corrupt one never displaces.
+	YCbCrSlot *prepareYCbCrSlot(int videoPixelMode, bool corrupt);
 	const YCbCrSlot *findYCbCrSlot(u32 addr) const;
 	void freeYCbCrSlots();
 	void DoStateYCbCrSlots(PointerWrap &p);

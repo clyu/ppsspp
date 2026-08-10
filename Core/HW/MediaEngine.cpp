@@ -17,6 +17,7 @@
 
 #include "Common/Serialize/SerializeFuncs.h"
 #include "Common/Math/SIMDHeaders.h"
+#include "Common/MemoryUtil.h"
 #include "Common/StringUtils.h"
 #include "Core/System.h"
 #include "Core/Debugger/MemBlockInfo.h"
@@ -48,6 +49,12 @@ extern "C" {
 #ifdef USE_FFMPEG
 
 #include "Core/FFMPEGCompat.h"
+
+// stepVideo() converts straight into a YCbCr slot, so a slot's buffer is an sws_scale() destination
+// and has to be aligned the way av_malloc() would have aligned m_buffer, which used to be the only
+// destination. ffmpeg's own ALIGN is 32 when built with AVX; 64 satisfies that and puts the picture
+// on a cache line too. Plain new[] only promises max_align_t, which is 16 on x86-64.
+static constexpr size_t YCBCR_SLOT_ALIGNMENT = 64;
 
 static AVPixelFormat getSwsFormat(int pspFormat)
 {
@@ -296,9 +303,17 @@ void MediaEngine::DoStateYCbCrSlots(PointerWrap &p) {
 			Do(p, size);
 			// A state written by a build with more slots than we have must still load, so read the
 			// picture data either way and only then decide whether there is room to keep it.
-			u8 *rgb = size != 0 ? new u8[size] : nullptr;
-			if (rgb)
+			u8 *rgb = size != 0 ? (u8 *)AllocateAlignedMemory(size, YCBCR_SLOT_ALIGNMENT) : nullptr;
+			if (rgb) {
 				DoArray(p, rgb, (int)size);
+			} else if (size != 0) {
+				// The bytes have to come off the stream even when we can't keep them, or every
+				// field after this slot misreads. Losing one picture is survivable; desyncing the
+				// savestate is not.
+				std::vector<u8> discard(size);
+				DoArray(p, discard.data(), (int)size);
+				ERROR_LOG(Log::ME, "Failed to allocate %u bytes for a YCbCr slot from savestate", size);
+			}
 
 			// The geometry and the byte count are separate fields, but writeVideoImageWithRange()
 			// walks the picture purely by width/height/pixelMode and never consults size. If a
@@ -322,7 +337,7 @@ void MediaEngine::DoStateYCbCrSlots(PointerWrap &p) {
 				slot.pixelMode = pixelMode;
 				slot.lastUsed = lastUsed;
 			} else {
-				delete[] rgb;
+				FreeAlignedMemory(rgb);
 			}
 		}
 	} else {
@@ -527,12 +542,12 @@ void MediaEngine::closeContext() {
 #endif
 }
 
-void MediaEngine::storeYCbCrFrame(int videoPixelMode, bool corrupt) {
+MediaEngine::YCbCrSlot *MediaEngine::prepareYCbCrSlot(int videoPixelMode, bool corrupt) {
 #ifdef USE_FFMPEG
 	// No target means the caller went through the direct sceMpegAvcDecode path, which draws
 	// immediately and never asks for a picture by address - nothing to file.
 	if (m_ycbcrTarget == 0 || !m_pFrameRGB || m_desWidth <= 0 || m_desHeight <= 0)
-		return;
+		return nullptr;
 
 	// stepVideo() just set linesize to exactly this, so the picture is tightly packed.
 	const size_t need = (size_t)m_desWidth * m_desHeight * getPixelFormatBytes(videoPixelMode);
@@ -567,15 +582,28 @@ void MediaEngine::storeYCbCrFrame(int videoPixelMode, bool corrupt) {
 	if (corrupt && slot->addr == m_ycbcrTarget && slot->rgb) {
 		slot->lastUsed = ++m_ycbcrTick;
 		m_ycbcrTarget = 0;
-		return;
+		return nullptr;
 	}
 
 	if (slot->size < need) {
-		delete[] slot->rgb;
-		slot->rgb = new u8[need];
+		// m_pFrameRGB->data[0] may still be aliasing this slot's old buffer from an earlier decode,
+		// so don't leave it pointing at the allocation we're about to release.
+		if (m_pFrameRGB->data[0] == slot->rgb)
+			m_pFrameRGB->data[0] = m_buffer;
+		FreeAlignedMemory(slot->rgb);
+		slot->rgb = (u8 *)AllocateAlignedMemory(need, YCBCR_SLOT_ALIGNMENT);
+		if (!slot->rgb) {
+			// Unlike new[], this reports failure instead of throwing. Give up on filing the picture
+			// rather than handing sws_scale() a null destination - the caller then converts into
+			// m_buffer, so playback continues and only the per-buffer routing is lost.
+			ERROR_LOG(Log::ME, "Failed to allocate %d bytes for a YCbCr slot", (int)need);
+			slot->size = 0;
+			slot->addr = 0;
+			m_ycbcrTarget = 0;
+			return nullptr;
+		}
 		slot->size = need;
 	}
-	memcpy(slot->rgb, m_pFrameRGB->data[0], need);
 	slot->addr = m_ycbcrTarget;
 	slot->width = m_desWidth;
 	slot->height = m_desHeight;
@@ -586,6 +614,9 @@ void MediaEngine::storeYCbCrFrame(int videoPixelMode, bool corrupt) {
 	// its buffer - otherwise a game mixing in the direct sceMpegAvcDecode path would keep filing
 	// its frames under whichever address the YCbCr path happened to use last.
 	m_ycbcrTarget = 0;
+	return slot;
+#else
+	return nullptr;
 #endif
 }
 
@@ -601,7 +632,16 @@ const MediaEngine::YCbCrSlot *MediaEngine::findYCbCrSlot(u32 addr) const {
 
 void MediaEngine::freeYCbCrSlots() {
 	for (YCbCrSlot &slot : m_ycbcrSlots) {
-		delete[] slot.rgb;
+#ifdef USE_FFMPEG
+		// stepVideo() converts directly into a slot and leaves m_pFrameRGB->data[0] aliasing it, so
+		// releasing that slot here has to take the alias down with it rather than leave the "newest
+		// picture" pointing into freed memory.
+		if (m_pFrameRGB && slot.rgb && m_pFrameRGB->data[0] == slot.rgb) {
+			m_pFrameRGB->data[0] = m_buffer;
+			m_frameRGBValid = false;
+		}
+#endif
+		FreeAlignedMemory(slot.rgb);
 		slot = YCbCrSlot();
 	}
 }
@@ -957,13 +997,20 @@ bool MediaEngine::stepVideo(int videoPixelMode, bool skipFrame) {
 					// Update the linesize for the new format too.  We started with the largest size, so it should fit.
 					m_pFrameRGB->linesize[0] = getPixelFormatBytes(videoPixelMode) * m_desWidth;
 
+					// Claim the slot for the buffer the game is decoding into, so that a later
+					// sceMpegAvcCsc naming that buffer gets this picture and not the newest one -
+					// and convert straight into it. The slot is where that call reads from, so
+					// scaling into m_buffer and copying across afterwards would walk a whole frame
+					// twice to no end. With no slot (the direct sceMpegAvcDecode path, or a corrupt
+					// frame we refuse to file) we convert into m_buffer as before.
+					YCbCrSlot *slot = prepareYCbCrSlot(videoPixelMode, frameIsCorrupt(m_pFrame));
+					m_pFrameRGB->data[0] = slot ? slot->rgb : m_buffer;
+
 					sws_scale(m_sws_ctx, m_pFrame->data, m_pFrame->linesize, 0,
 						m_pCodecCtx->height, m_pFrameRGB->data, m_pFrameRGB->linesize);
+					// Everything that wants the newest picture reads it through m_pFrameRGB, which
+					// now aliases whichever buffer we just filled.
 					m_frameRGBValid = true;
-
-					// File it under the buffer the game is decoding into, so a later
-					// sceMpegAvcCsc naming that buffer gets this picture and not the newest one.
-					storeYCbCrFrame(videoPixelMode, frameIsCorrupt(m_pFrame));
 				}
 
 #if LIBAVUTIL_VERSION_MAJOR >= 59
@@ -1311,9 +1358,11 @@ int MediaEngine::writeVideoImageWithRange(u32 bufferPtr, int frameWidth, int vid
 
 u8 *MediaEngine::getFrameImage() {
 #ifdef USE_FFMPEG
-	// Same rule as writeVideoImage(): the buffer behind m_pFrameRGB comes from av_malloc, and
-	// openContext() can allocate it without a single decode having filled it in - handing that out
-	// would let the caller copy raw heap contents into the game's memory.
+	// Same rule as writeVideoImage(): the buffer behind m_pFrameRGB gets allocated before anything
+	// converts into it - openContext() can set it up without a single decode having filled it in -
+	// and handing that out would let the caller copy raw heap contents into the game's memory.
+	// (data[0] aliases a YCbCr slot rather than m_buffer whenever stepVideo() converted into one,
+	// but it is uninitialized until a decode either way, so the check is the same.)
 	if (!m_pFrameRGB || !m_frameRGBValid)
 		return nullptr;
 	return m_pFrameRGB->data[0];
