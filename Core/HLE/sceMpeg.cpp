@@ -756,8 +756,6 @@ static bool InitPmp(MpegContext * ctx){
 	// set pmp video size. Better to get from pmp file directly if possible. Any idea?
 	pmp_CodecCtx->width = 480;
 	pmp_CodecCtx->height = 272;
-	mediaengine->m_desHeight = pmp_CodecCtx->height;
-	mediaengine->m_desWidth = pmp_CodecCtx->width;
 
 	// Open pmp video codec
 	if (avcodec_open2(pmp_CodecCtx, pmp_Codec, NULL) < 0){
@@ -785,6 +783,14 @@ static bool InitPmp(MpegContext * ctx){
 	mediaengine->m_bufSize = avpicture_get_size(pmp_want_pix_fmt, pmp_CodecCtx->width, pmp_CodecCtx->height);
 #endif
 	mediaengine->m_buffer = (u8*)av_malloc(mediaengine->m_bufSize);
+
+	// Only now, with a buffer that is really this size behind them. m_desWidth/m_desHeight are what
+	// writeVideoImage() and writeVideoImageWithRange() bound their reads by, and a frame from an
+	// earlier, smaller stream can still be sitting in m_pFrameRGB when we get here - storing the pmp
+	// size any earlier would describe that frame as 480x272 and let a return above walk right off
+	// the end of it, straight into the game's memory. Same reason setVideoDim() works on locals.
+	mediaengine->m_desWidth = pmp_CodecCtx->width;
+	mediaengine->m_desHeight = pmp_CodecCtx->height;
 
 	return true;
 #else
