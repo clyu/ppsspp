@@ -16,6 +16,21 @@ VK_DEFINE_HANDLE(VmaAllocation);
 //
 // Vulkan memory management utils.
 
+// Where a push pool's memory should live. This only makes a difference on discrete GPUs, where the
+// two options are genuinely different memory: on an integrated GPU every host-visible memory type
+// is the same system RAM and the choice is a no-op.
+enum class PushPoolMemory {
+	// Prefers DEVICE_LOCAL host-visible memory. On a discrete card that means the host-visible BAR
+	// window, which is uncached write-combined - CPU writes go straight out over PCIe. That is the
+	// right trade for small data the GPU re-reads constantly, like uniforms.
+	DeviceLocalPreferred,
+	// Prefers ordinary cached system memory, letting the GPU DMA out of it. Much faster to fill
+	// from the CPU, so this is what bulk staging data wants - a movie frame's worth of texture is
+	// hundreds of KB written once and read once, and pushing that through the BAR is what made
+	// texture uploads memory-bound on discrete cards.
+	HostCached,
+};
+
 // Simple memory pushbuffer pool that can share blocks between the "frames", to reduce the impact of push memory spikes -
 // a later frame can gobble up redundant buffers from an earlier frame even if they don't share frame index.
 // NOT thread safe! Can only be used from one thread (our main thread).
@@ -23,7 +38,8 @@ class VulkanPushPool : public GPUMemoryManager {
 public:
 	// Slack is reserved space at the end of each block, which can be useful if you do things like writing a vec3 with a vec4 store,
 	// which can be faster when using SIMD, or decode two vertices in parallel.
-	VulkanPushPool(VulkanContext *vulkan, const char *name, size_t originalBlockSize, size_t slack, VkBufferUsageFlags usage);
+	VulkanPushPool(VulkanContext *vulkan, const char *name, size_t originalBlockSize, size_t slack, VkBufferUsageFlags usage,
+		PushPoolMemory memory = PushPoolMemory::DeviceLocalPreferred);
 	~VulkanPushPool();
 
 	void Destroy();
@@ -93,6 +109,8 @@ private:
 	VkDeviceSize originalBlockSize_;
 	std::vector<Block> blocks_;
 	VkBufferUsageFlags usage_;
+	PushPoolMemory memory_;
+	bool loggedMemoryType_ = false;
 	int curBlockIndex_ = -1;
 	VkDeviceSize slack_;
 	const char *name_;

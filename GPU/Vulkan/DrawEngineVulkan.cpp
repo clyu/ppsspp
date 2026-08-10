@@ -78,6 +78,15 @@ void DrawEngineVulkan::InitDeviceObjects() {
 	pushUBO_ = (VulkanPushPool *)draw_->GetNativeObject(Draw::NativeObject::PUSH_POOL);
 	pushVertex_ = new VulkanPushPool(vulkan, "pushVertex", 4 * 1024 * 1024, 256, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
 	pushIndex_ = new VulkanPushPool(vulkan, "pushIndex", 512 * 1024, 64, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
+	// Texture data gets its own pool in cached system memory rather than sharing the UBO pool. The
+	// CPU writes whole texture levels into it in one pass and the GPU then copies them into tiled
+	// images, so it wants memory that is cheap to write; the UBO pool wants memory the GPU can
+	// re-read cheaply, which on a discrete card is the opposite choice.
+	// STORAGE_BUFFER is needed because the compute-based texture scalers bind the staged level
+	// directly as an input buffer instead of copying it into an image first.
+	pushTexture_ = new VulkanPushPool(vulkan, "pushTexture", 4 * 1024 * 1024, 32,
+		VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+		PushPoolMemory::HostCached);
 
 	VkSamplerCreateInfo samp{ VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO };
 	samp.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
@@ -131,6 +140,11 @@ void DrawEngineVulkan::DestroyDeviceObjects() {
 		delete pushIndex_;
 		pushIndex_ = nullptr;
 	}
+	if (pushTexture_) {
+		pushTexture_->Destroy();
+		delete pushTexture_;
+		pushTexture_ = nullptr;
+	}
 
 	if (samplerSecondaryNearest_ != VK_NULL_HANDLE)
 		vulkan->Delete().QueueDeleteSampler(samplerSecondaryNearest_);
@@ -165,6 +179,7 @@ void DrawEngineVulkan::BeginFrame() {
 	// pushUBO is the thin3d push pool, don't need to BeginFrame again.
 	pushVertex_->BeginFrame();
 	pushIndex_->BeginFrame();
+	pushTexture_->BeginFrame();
 
 	tessDataTransferVulkan->SetPushPool(pushUBO_);
 

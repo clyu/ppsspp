@@ -139,7 +139,7 @@ public:
 	}
 
 	VulkanPushPool *GetPushBufferForTextureData() {
-		return pushUBO_;
+		return pushTexture_;
 	}
 
 	const DrawEngineVulkanStats &GetStats() const {
@@ -195,10 +195,14 @@ private:
 	GEPrimitiveType lastPrim_ = GE_PRIM_INVALID;
 
 	// This one's not accurately named, it's used for all kinds of stuff that's not vertices or indices.
+	// Owned by thin3d, not by us.
 	VulkanPushPool *pushUBO_ = nullptr;
 
 	VulkanPushPool *pushVertex_ = nullptr;
 	VulkanPushPool *pushIndex_ = nullptr;
+	// Staging memory for texture uploads. Separate from pushUBO_ because it wants cached system
+	// memory - see PushPoolMemory::HostCached.
+	VulkanPushPool *pushTexture_ = nullptr;
 
 	// Other
 	ShaderManagerVulkan *shaderManager_ = nullptr;

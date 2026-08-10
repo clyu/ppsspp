@@ -31,8 +31,9 @@ using namespace PPSSPP_VK;
 // Always keep around push buffers at least this long (seconds).
 static const double PUSH_GARBAGE_COLLECTION_DELAY = 10.0;
 
-VulkanPushPool::VulkanPushPool(VulkanContext *vulkan, const char *name, size_t originalBlockSize, size_t slack, VkBufferUsageFlags usage)
-	: vulkan_(vulkan), name_(name), originalBlockSize_(originalBlockSize), usage_(usage), slack_(slack) {
+VulkanPushPool::VulkanPushPool(VulkanContext *vulkan, const char *name, size_t originalBlockSize, size_t slack, VkBufferUsageFlags usage,
+	PushPoolMemory memory)
+	: vulkan_(vulkan), name_(name), originalBlockSize_(originalBlockSize), usage_(usage), memory_(memory), slack_(slack) {
 	RegisterGPUMemoryManager(this);
 
 	for (int i = 0; i < VulkanContext::MAX_INFLIGHT_FRAMES; i++) {
@@ -65,10 +66,19 @@ VulkanPushPool::Block VulkanPushPool::CreateBlock(size_t size) {
 	b.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 	VmaAllocationCreateInfo allocCreateInfo{};
 
-	allocCreateInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+	if (memory_ == PushPoolMemory::HostCached) {
+		// CPU_ONLY guarantees HOST_VISIBLE|HOST_COHERENT and, unlike CPU_TO_GPU, does *not* add a
+		// preference for DEVICE_LOCAL - that preference is what steers us into the host-visible BAR
+		// window on a discrete GPU. Asking for HOST_CACHED on top picks the cached system memory
+		// type when the driver exposes one, and harmlessly falls back to whatever else fits if not.
+		allocCreateInfo.usage = VMA_MEMORY_USAGE_CPU_ONLY;
+		allocCreateInfo.preferredFlags = VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+	} else {
+		allocCreateInfo.usage = VMA_MEMORY_USAGE_CPU_TO_GPU;
+	}
 	allocCreateInfo.requiredFlags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;  // required to not get memory where we have to manually flush.
 	VmaAllocationInfo allocInfo{};
-	
+
 	VkResult result = vmaCreateBuffer(vulkan_->Allocator(), &b, &allocCreateInfo, &block.buffer, &block.allocation, &allocInfo);
 
 	_assert_msg_(result == VK_SUCCESS, "VulkanPushPool: Failed to create buffer (result = %s, size = %d)", VulkanResultToString(result), (int)size);
@@ -77,6 +87,20 @@ VulkanPushPool::Block VulkanPushPool::CreateBlock(size_t size) {
 
 	_assert_msg_(result == VK_SUCCESS, "VulkanPushPool: Failed to map memory (result = %s, size = %d)", VulkanResultToString(result), (int)size);
 	_assert_msg_(block.writePtr != nullptr, "VulkanPushPool: Failed to map memory on block of size %d", (int)block.size);
+
+	// Log what we actually landed on, once per pool. Whether a host-visible allocation is cached or
+	// uncached decides how expensive it is to fill from the CPU, and it's driver-dependent enough
+	// that guessing from the request alone isn't reliable.
+	if (!loggedMemoryType_) {
+		loggedMemoryType_ = true;
+		VkMemoryPropertyFlags flags = 0;
+		vmaGetAllocationMemoryProperties(vulkan_->Allocator(), block.allocation, &flags);
+		INFO_LOG(Log::G3D, "%s: memory type %d [%s%s%s%s ]", name_, allocInfo.memoryType,
+			(flags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) ? " DEVICE_LOCAL" : "",
+			(flags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ? " HOST_VISIBLE" : "",
+			(flags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) ? " HOST_COHERENT" : "",
+			(flags & VK_MEMORY_PROPERTY_HOST_CACHED_BIT) ? " HOST_CACHED" : "");
+	}
 	return block;
 }
 
