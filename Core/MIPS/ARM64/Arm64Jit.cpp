@@ -195,8 +195,10 @@ void Arm64Jit::ClearCache() {
 	INFO_LOG(Log::JIT, "ARM64Jit: Clearing the cache!");
 	blocks.Clear();
 	inlineDispatchFetches.clear();
+	// Only the used part gets poisoned, so that's all that needs flushing.
+	const u8 *usedEnd = GetCodePtr();
 	ClearCodeSpace(jitStartOffset);
-	FlushIcacheSection(region + jitStartOffset, region + region_size - jitStartOffset);
+	FlushIcacheSection(region + jitStartOffset, usedEnd);
 }
 
 void Arm64Jit::InvalidateCacheAt(u32 em_address, int length) {

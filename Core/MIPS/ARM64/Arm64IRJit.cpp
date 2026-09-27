@@ -322,8 +322,10 @@ bool Arm64JitBackend::DescribeCodePtr(const u8 *ptr, std::string &name) const {
 
 void Arm64JitBackend::ClearAllBlocks() {
 	inlineDispatchFetches_.clear();
+	// Only the used part gets poisoned, so that's all that needs flushing.
+	const u8 *usedEnd = GetCodePtr();
 	ClearCodeSpace(jitStartOffset_);
-	FlushIcacheSection(region + jitStartOffset_, region + region_size - jitStartOffset_);
+	FlushIcacheSection(region + jitStartOffset_, usedEnd);
 	EraseAllLinks(-1);
 }
 

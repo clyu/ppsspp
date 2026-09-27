@@ -4335,7 +4335,9 @@ void ARM64CodeBlock::PoisonMemory(int offset) {
 	ptrdiff_t writable = m_writable - m_code;
 
 	u32 *ptr = (u32 *)(region + offset + writable);
-	u32 *maxptr = (u32 *)(region + region_size - offset + writable);
+	// Only the part up to the code pointer can hold code. Past it, the memory is still poisoned from an
+	// earlier clear, or was never written, so we skip touching (and committing) all of those pages.
+	u32 *maxptr = (u32 *)(m_code + writable);
 	// If our memory isn't a multiple of u32 then this won't write the last remaining bytes with anything
 	// Less than optimal, but there would be nothing we could do but throw a runtime warning anyway.
 	// AArch64: 0xD4200000 = BRK 0
