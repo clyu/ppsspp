@@ -22,6 +22,7 @@
 #if PPSSPP_ARCH(ARM64) || (PPSSPP_PLATFORM(WINDOWS) && !defined(__LIBRETRO__))
 
 #include <string>
+#include <unordered_set>
 #include <vector>
 #include "Common/Arm64Emitter.h"
 #include "Core/MIPS/IR/IRJit.h"
@@ -45,6 +46,10 @@ public:
 	void InvalidateBlock(IRBlockCache *irBlockCache, int block_num) override;
 
 	void UpdateFCR31(MIPSState *mipsState) override;
+
+	bool IsAtInlineDispatchFetch(const u8 *ptr) const override {
+		return inlineDispatchFetches_.count(ptr) != 0;
+	}
 
 protected:
 	const CodeBlockCommon &CodeBlock() const override {
@@ -140,6 +145,9 @@ private:
 
 	const u8 *saveStaticRegisters_ = nullptr;
 	const u8 *loadStaticRegisters_ = nullptr;
+
+	// Copies of the dispatcher's fetch inlined at ExitToReg.
+	std::unordered_set<const u8 *> inlineDispatchFetches_;
 
 	// Indexed by FPCR FZ:RN bits for convenience.  Uses SCRATCH2.
 	const u8 *convertS0ToSCRATCH1_[8];

@@ -592,7 +592,7 @@ const u8 *IRNativeJit::GetCodeBase() const {
 }
 
 bool IRNativeJit::IsAtDispatchFetch(const u8 *ptr) const {
-	return ptr == backend_->GetNativeHooks().dispatchFetch;
+	return ptr == backend_->GetNativeHooks().dispatchFetch || backend_->IsAtInlineDispatchFetch(ptr);
 }
 
 const u8 *IRNativeJit::GetDispatcher() const {

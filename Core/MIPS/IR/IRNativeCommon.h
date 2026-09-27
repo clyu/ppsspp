@@ -79,6 +79,11 @@ public:
 
 	virtual void UpdateFCR31(MIPSState *mipsState) {}
 
+	// For backends that inline copies of the dispatcher's fetch (hooks_.dispatchFetch) at exits.
+	virtual bool IsAtInlineDispatchFetch(const u8 *ptr) const {
+		return false;
+	}
+
 	const IRNativeHooks &GetNativeHooks() const {
 		return hooks_;
 	}

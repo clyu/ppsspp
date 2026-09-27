@@ -19,6 +19,7 @@
 // In other words, PPSSPP_ARCH(ARM64) || DISASM_ALL.
 #if PPSSPP_ARCH(ARM64) || (PPSSPP_PLATFORM(WINDOWS) && !defined(__LIBRETRO__))
 
+#include "Core/MemMap.h"
 #include "Core/MIPS/ARM64/Arm64IRJit.h"
 #include "Core/MIPS/ARM64/Arm64IRRegCache.h"
 
@@ -48,11 +49,41 @@ void Arm64JitBackend::CompIR_Exit(IRInst inst) {
 		break;
 
 	case IROp::ExitToReg:
+	{
 		exitReg = regs_.MapGPR(inst.src1);
 		FlushAll();
 		MOV(SCRATCH1, exitReg);
+		if (!jo.enableBlocklink) {
+			B(dispatcherPCInSCRATCH1_);
+			break;
+		}
+
+		// This is dispatcherPCInSCRATCH1_ inlined, so each indirect jump gets its own branch prediction,
+		// rather than all of them sharing the dispatcher's BR.
+		// The bail path, JitAt, and the fault handler read the PC from RAM, so store it.
+		MovToPC(SCRATCH1);
+		WriteDebugPC(SCRATCH1);
+		FixupBranch bail = TBNZ(DOWNCOUNTREG, 31);
+#ifdef MASKED_PSP_MEMORY
+		ANDI2R(SCRATCH1, SCRATCH1, Memory::MEMVIEW32_MASK);
+#endif
+		// The fault handler treats a bad PC here the same as at the dispatcher's fetch.
+		inlineDispatchFetches_.insert(GetCodePointer());
+		LDR(SCRATCH2, MEMBASEREG, SCRATCH1_64);
+		LSR(SCRATCH1, SCRATCH2, 24);
+		CMP(SCRATCH1, MIPS_EMUHACK_OPCODE >> 24);
+		FixupBranch noBlock = B(CC_NEQ);
+		// We don't mask SCRATCH2 as that's already baked into JITBASEREG.
+		ADD(SCRATCH2_64, JITBASEREG, SCRATCH2_64);
+		BR(SCRATCH2_64);
+
+		SetJumpTarget(bail);
 		B(dispatcherPCInSCRATCH1_);
+		SetJumpTarget(noBlock);
+		// The PC is in RAM and the downcount was checked, so let the dispatcher compile it.
+		B(dispatcherNoCheck_);
 		break;
+	}
 
 	case IROp::ExitToPC:
 		FlushAll();

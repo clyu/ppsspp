@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include <unordered_set>
+
 #include "Common/CPUDetect.h"
 #include "Common/ArmCommon.h"
 #include "Common/Arm64Emitter.h"
@@ -187,7 +189,7 @@ public:
 		return dispatcher;
 	}
 	bool IsAtDispatchFetch(const u8 *ptr) const override {
-		return ptr == dispatcherFetch;
+		return ptr == dispatcherFetch || inlineDispatchFetches.count(ptr) != 0;
 	}
 
 	void LinkBlock(u8 *exitPoint, const u8 *checkedEntry) override;
@@ -281,6 +283,9 @@ public:
 	const u8 *dispatcher;
 	const u8 *dispatcherNoCheck;
 	const u8 *dispatcherFetch;
+
+	// Copies of the dispatcher's fetch inlined at indirect jumps, see WriteExitDestInR.
+	std::unordered_set<const u8 *> inlineDispatchFetches;
 
 	const u8 *saveStaticRegisters;
 	const u8 *loadStaticRegisters;

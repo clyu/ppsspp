@@ -37,6 +37,8 @@ using namespace Arm64IRJitConstants;
 static constexpr int MIN_BLOCK_NORMAL_LEN = 12;
 // As long as we can fit a B, we should be fine.
 static constexpr int MIN_BLOCK_EXIT_LEN = 4;
+// The checked entry and an inlined dispatch at ExitToReg aren't covered by the per-IR estimate.
+static constexpr int BLOCK_WRITE_EXTRA = 64;
 
 Arm64JitBackend::Arm64JitBackend(JitOptions &jitopt, IRBlockCache &blocks)
 	: IRNativeBackend(blocks), jo(jitopt), regs_(&jo), fp_(this) {
@@ -70,7 +72,7 @@ bool Arm64JitBackend::CompileBlock(IRBlockCache *irBlockCache, int block_num) {
 		return false;
 
 	IRBlock *block = irBlockCache->GetBlock(block_num);
-	BeginWrite(std::min(GetSpaceLeft(), (size_t)block->GetNumIRInstructions() * 32));
+	BeginWrite(std::min(GetSpaceLeft(), (size_t)block->GetNumIRInstructions() * 32 + BLOCK_WRITE_EXTRA));
 
 	u32 startPC = block->GetOriginalStart();
 	bool wroteCheckedOffset = false;
@@ -319,6 +321,7 @@ bool Arm64JitBackend::DescribeCodePtr(const u8 *ptr, std::string &name) const {
 }
 
 void Arm64JitBackend::ClearAllBlocks() {
+	inlineDispatchFetches_.clear();
 	ClearCodeSpace(jitStartOffset_);
 	FlushIcacheSection(region + jitStartOffset_, region + region_size - jitStartOffset_);
 	EraseAllLinks(-1);

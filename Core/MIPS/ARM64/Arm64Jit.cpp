@@ -194,6 +194,7 @@ void Arm64Jit::FlushPrefixV() {
 void Arm64Jit::ClearCache() {
 	INFO_LOG(Log::JIT, "ARM64Jit: Clearing the cache!");
 	blocks.Clear();
+	inlineDispatchFetches.clear();
 	ClearCodeSpace(jitStartOffset);
 	FlushIcacheSection(region + jitStartOffset, region + region_size - jitStartOffset);
 }
@@ -690,8 +691,34 @@ void Arm64Jit::WriteExitDestInR(ARM64Reg Reg) {
 	}
 	WriteDownCount();
 	MOV(SCRATCH1, Reg);
-	// TODO: shouldn't need an indirect branch here...
+	if (!jo.enableBlocklink) {
+		B((const void *)dispatcherPCInSCRATCH1);
+		return;
+	}
+
+	// This is dispatcherPCInSCRATCH1 inlined, so each indirect jump gets its own branch prediction,
+	// rather than all of them sharing the dispatcher's BR.
+	// The bail path, JitAt, and the fault handler read the PC from RAM, so store it.
+	MovToPC(SCRATCH1);
+	FixupBranch bail = B(CC_MI);
+#ifdef MASKED_PSP_MEMORY
+	ANDI2R(SCRATCH1, SCRATCH1, 0x3FFFFFFF);
+#endif
+	// The fault handler treats a bad PC here the same as at dispatcherFetch.
+	inlineDispatchFetches.insert(GetCodePtr());
+	LDR(SCRATCH2, MEMBASEREG, SCRATCH1_64);
+	LSR(SCRATCH1, SCRATCH2, 24);
+	CMP(SCRATCH1, MIPS_EMUHACK_OPCODE >> 24);
+	FixupBranch noBlock = B(CC_NEQ);
+	// We don't mask SCRATCH2 as that's already baked into JITBASEREG.
+	ADD(SCRATCH2_64, JITBASEREG, SCRATCH2_64);
+	BR(SCRATCH2_64);
+
+	SetJumpTarget(bail);
 	B((const void *)dispatcherPCInSCRATCH1);
+	SetJumpTarget(noBlock);
+	// The PC is in RAM and the downcount was checked, so let the dispatcher compile it.
+	B((const void *)dispatcherNoCheck);
 }
 
 void Arm64Jit::WriteSyscallExit() {
