@@ -195,7 +195,8 @@ void Arm64Jit::GenerateFixedCode(const JitOptions &jo) {
 	// Fixed registers, these are always kept when in Jit context.
 	MOVP2R(MEMBASEREG, Memory::base);
 	MOVP2R(CTXREG, mips_);
-	MOVP2R(JITBASEREG, GetBasePtr());
+	// Pre-subtract this so the dispatcher doesn't need to mask off the emuhack opcode.
+	MOVI2R(JITBASEREG, (intptr_t)GetBasePtr() - MIPS_EMUHACK_OPCODE);
 
 	LoadStaticRegisters();
 	MovFromPC(SCRATCH1);
@@ -223,11 +224,6 @@ void Arm64Jit::GenerateFixedCode(const JitOptions &jo) {
 		FixupBranch badCoreState = B(CC_NEQ);
 		FixupBranch skipToRealDispatch2 = B(); //skip the sync and compare first time
 
-		dispatcherPCInSCRATCH1 = GetCodePtr();
-		// TODO: Do we always need to write PC to RAM here?
-		MovToPC(SCRATCH1);
-
-		// At this point : flags = EQ. Fine for the next check, no need to jump over it.
 		dispatcher = GetCodePtr();
 
 			// The result of slice decrementation should be in flags if somebody jumped here
@@ -237,6 +233,17 @@ void Arm64Jit::GenerateFixedCode(const JitOptions &jo) {
 			SetJumpTarget(skipToRealDispatch2);
 
 			dispatcherNoCheck = GetCodePtr();
+			MovFromPC(SCRATCH1);
+			FixupBranch fetchPCInSCRATCH1 = B();
+
+			// This is the hot entry (exits and jr/jalr), so it falls straight through to the fetch.
+			dispatcherPCInSCRATCH1 = GetCodePtr();
+			// The bail path, JitAt, and the fault handler read the PC from RAM, so store it.
+			// But look it up from SCRATCH1 directly, rather than waiting on a reload of the store.
+			MovToPC(SCRATCH1);
+			FixupBranch bailPCInSCRATCH1 = B(CC_MI);
+
+			SetJumpTarget(fetchPCInSCRATCH1);
 
 			// Debug
 			if (enableDebug) {
@@ -244,16 +251,16 @@ void Arm64Jit::GenerateFixedCode(const JitOptions &jo) {
 				MOV(X1, MEMBASEREG);
 				MOV(X2, JITBASEREG);
 				QuickCallFunction(SCRATCH1_64, (void *)&ShowPC);
+				MovFromPC(SCRATCH1);
 			}
 
-			LDR(INDEX_UNSIGNED, SCRATCH1, CTXREG, offsetof(MIPSState, pc));
 #ifdef MASKED_PSP_MEMORY
 			ANDI2R(SCRATCH1, SCRATCH1, 0x3FFFFFFF);
 #endif
 			dispatcherFetch = GetCodePtr();
 			LDR(SCRATCH1, MEMBASEREG, SCRATCH1_64);
 			LSR(SCRATCH2, SCRATCH1, 24);   // or UBFX(SCRATCH2, SCRATCH1, 24, 8)
-			ANDI2R(SCRATCH1, SCRATCH1, 0x00FFFFFF);
+			// We don't mask SCRATCH1 as that's already baked into JITBASEREG.
 			CMP(SCRATCH2, MIPS_EMUHACK_OPCODE >> 24);
 			FixupBranch skipJump = B(CC_NEQ);
 				ADD(SCRATCH1_64, JITBASEREG, SCRATCH1_64);
@@ -271,6 +278,7 @@ void Arm64Jit::GenerateFixedCode(const JitOptions &jo) {
 			B(dispatcherNoCheck); // no point in special casing this
 
 		SetJumpTarget(bail);
+		SetJumpTarget(bailPCInSCRATCH1);
 		SetJumpTarget(bailCoreState);
 
 		MOVP2R(SCRATCH1_64, &coreState);

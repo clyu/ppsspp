@@ -184,15 +184,23 @@ void Arm64JitBackend::GenerateFixedCode(MIPSState *mipsState) {
 		TBNZ(DOWNCOUNTREG, 31, outerLoop_);
 		FixupBranch skipToRealDispatch = B();
 
-		dispatcherPCInSCRATCH1_ = GetCodePtr();
-		MovToPC(SCRATCH1);
-
 		hooks_.dispatcher = GetCodePtr();
 
 			FixupBranch bail = TBNZ(DOWNCOUNTREG, 31);
 			SetJumpTarget(skipToRealDispatch);
 
 			dispatcherNoCheck_ = GetCodePtr();
+			MovFromPC(SCRATCH1);
+			FixupBranch fetchPCInSCRATCH1 = B();
+
+			// This is the hot entry (exits and jr/jalr), so it falls straight through to the fetch.
+			dispatcherPCInSCRATCH1_ = GetCodePtr();
+			// The bail path, JitAt, and the fault handler read the PC from RAM, so store it.
+			// But look it up from SCRATCH1 directly, rather than waiting on a reload of the store.
+			MovToPC(SCRATCH1);
+			FixupBranch bailPCInSCRATCH1 = TBNZ(DOWNCOUNTREG, 31);
+
+			SetJumpTarget(fetchPCInSCRATCH1);
 
 			// Debug
 			if (enableDebug) {
@@ -200,9 +208,9 @@ void Arm64JitBackend::GenerateFixedCode(MIPSState *mipsState) {
 				MOV(X1, MEMBASEREG);
 				MOV(X2, JITBASEREG);
 				QuickCallFunction(SCRATCH1_64, &ShowPC);
+				MovFromPC(SCRATCH1);
 			}
 
-			MovFromPC(SCRATCH1);
 			WriteDebugPC(SCRATCH1);
 #ifdef MASKED_PSP_MEMORY
 			ANDI2R(SCRATCH1, SCRATCH1, Memory::MEMVIEW32_MASK);
@@ -228,6 +236,7 @@ void Arm64JitBackend::GenerateFixedCode(MIPSState *mipsState) {
 			B(dispatcherNoCheck_);
 
 		SetJumpTarget(bail);
+		SetJumpTarget(bailPCInSCRATCH1);
 
 		MOVP2R(SCRATCH1_64, &coreState);
 		LDR(INDEX_UNSIGNED, SCRATCH1, SCRATCH1_64, 0);

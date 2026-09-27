@@ -696,10 +696,16 @@ void Arm64Jit::WriteExit(u32 destination, int exit_num) {
 
 void Arm64Jit::WriteExitDestInR(ARM64Reg Reg) {
 	// TODO: If not fast memory, check for invalid address in reg and trigger exception.
-	MovToPC(Reg);
+	// The dispatcher stores the PC and looks it up straight from SCRATCH1.
+	// WriteDownCount may use SCRATCH1 for a large immediate, so only move into it afterward.
+	if (Reg == SCRATCH1) {
+		MOV(SCRATCH2, Reg);
+		Reg = SCRATCH2;
+	}
 	WriteDownCount();
+	MOV(SCRATCH1, Reg);
 	// TODO: shouldn't need an indirect branch here...
-	B((const void *)dispatcher);
+	B((const void *)dispatcherPCInSCRATCH1);
 }
 
 void Arm64Jit::WriteSyscallExit() {
