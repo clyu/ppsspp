@@ -313,12 +313,11 @@ namespace MIPSComp {
 		case 43: //sw
 #ifndef MASKED_PSP_MEMORY
 			if (jo.cachePointers && g_Config.bFastMemory) {
-				// ARM has smaller load/store immediate displacements than MIPS, 12 bits - and some memory ops only have 8 bits.
-				int offsetRange = 0x3ff;
-				if (o == 41 || o == 33 || o == 37 || o == 32)
-					offsetRange = 0xff;  // 8 bit offset only
-				if (!gpr.IsImm(rs) && rs != rt && (offset <= offsetRange) && offset >= 0 &&
-					  (dataSize == 1 || (offset & (dataSize - 1)) == 0)) {  // Check that the offset is aligned to the access size as that's required for INDEX_UNSIGNED encodings. we can get here through fallback from lwl/lwr
+				// INDEX_UNSIGNED takes 12 bits scaled by the access size, but only for aligned, non-negative offsets.
+				// Anything else in -256..255 fits the unscaled LDUR/STUR forms. We can get here through fallback from lwl/lwr.
+				bool unscaled = offset < 0 || (offset & (dataSize - 1)) != 0;
+				bool offsetFits = unscaled ? (offset >= -256 && offset <= 255) : offset <= 0xFFF * dataSize;
+				if (!gpr.IsImm(rs) && rs != rt && offsetFits) {
 					gpr.SpillLock(rs, rt);
 					gpr.MapRegAsPointer(rs);
 
@@ -329,16 +328,30 @@ namespace MIPSComp {
 						targetReg = gpr.R(rt);
 					}
 
-					switch (o) {
-					case 35: LDR(INDEX_UNSIGNED, targetReg, gpr.RPtr(rs), offset); break;
-					case 37: LDRH(INDEX_UNSIGNED, targetReg, gpr.RPtr(rs), offset); break;
-					case 33: LDRSH(INDEX_UNSIGNED, targetReg, gpr.RPtr(rs), offset); break;
-					case 36: LDRB(INDEX_UNSIGNED, targetReg, gpr.RPtr(rs), offset); break;
-					case 32: LDRSB(INDEX_UNSIGNED, targetReg, gpr.RPtr(rs), offset); break;
-						// Store
-					case 43: STR(INDEX_UNSIGNED, targetReg, gpr.RPtr(rs), offset); break;
-					case 41: STRH(INDEX_UNSIGNED, targetReg, gpr.RPtr(rs), offset); break;
-					case 40: STRB(INDEX_UNSIGNED, targetReg, gpr.RPtr(rs), offset); break;
+					if (unscaled) {
+						switch (o) {
+						case 35: LDUR(targetReg, gpr.RPtr(rs), offset); break;
+						case 37: LDURH(targetReg, gpr.RPtr(rs), offset); break;
+						case 33: LDURSH(targetReg, gpr.RPtr(rs), offset); break;
+						case 36: LDURB(targetReg, gpr.RPtr(rs), offset); break;
+						case 32: LDURSB(targetReg, gpr.RPtr(rs), offset); break;
+							// Store
+						case 43: STUR(targetReg, gpr.RPtr(rs), offset); break;
+						case 41: STURH(targetReg, gpr.RPtr(rs), offset); break;
+						case 40: STURB(targetReg, gpr.RPtr(rs), offset); break;
+						}
+					} else {
+						switch (o) {
+						case 35: LDR(INDEX_UNSIGNED, targetReg, gpr.RPtr(rs), offset); break;
+						case 37: LDRH(INDEX_UNSIGNED, targetReg, gpr.RPtr(rs), offset); break;
+						case 33: LDRSH(INDEX_UNSIGNED, targetReg, gpr.RPtr(rs), offset); break;
+						case 36: LDRB(INDEX_UNSIGNED, targetReg, gpr.RPtr(rs), offset); break;
+						case 32: LDRSB(INDEX_UNSIGNED, targetReg, gpr.RPtr(rs), offset); break;
+							// Store
+						case 43: STR(INDEX_UNSIGNED, targetReg, gpr.RPtr(rs), offset); break;
+						case 41: STRH(INDEX_UNSIGNED, targetReg, gpr.RPtr(rs), offset); break;
+						case 40: STRB(INDEX_UNSIGNED, targetReg, gpr.RPtr(rs), offset); break;
+						}
 					}
 					gpr.ReleaseSpillLocksAndDiscardTemps();
 					break;
@@ -398,10 +411,16 @@ namespace MIPSComp {
 
 				if (!g_Config.bFastMemory && rs != MIPS_REG_SP) {
 					skips = SetScratch1ForSafeAddress(rs, offset, SCRATCH2);
+					addrReg = SCRATCH1;
+#ifndef MASKED_PSP_MEMORY
+				} else if (offset == 0) {
+					// The register offset is zero-extended (UXTW), so rs can be used directly without a copy.
+					addrReg = gpr.R(rs);
+#endif
 				} else {
 					SetScratch1ToEffectiveAddress(rs, offset);
+					addrReg = SCRATCH1;
 				}
-				addrReg = SCRATCH1;
 			}
 
 			switch (o) {

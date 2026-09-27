@@ -72,10 +72,6 @@ static int SignExtend7(int x) {
 	return (x & 0x00000040) ? (0xFFFFFF80 | x) : (x & 0x7F);
 }
 
-static int SignExtend12(int x) {
-	return (x & 0x00000800) ? (0xFFFFF000 | x) : (x & 0xFFF);
-}
-
 static int HighestSetBit(int value) {
 	int highest = 0;
 	for (int i = 0; i < 32; i++) {
@@ -319,7 +315,8 @@ static void LoadStore(uint32_t w, uint64_t addr, Instruction *instr) {
 		bool index_pre = !index_unsigned && ((w >> 10) & 3) == 3;
 		if (V == 0) {
 			const char *signExt = ((opc & 0x2) && size < 3) ? "s" : "";
-			int imm12 = SignExtend12((w >> 10) & 0xFFF) << size;
+			// The unsigned offset form is never negative.
+			int imm12 = ((w >> 10) & 0xFFF) << size;
 			// Integer type
 			if (index_unsigned) {
 				snprintf(instr->text, sizeof(instr->text), "%s%s%s %c%d, [x%d, #%d]", opname[opc], signExt, sizeSuffix[size], r, Rt, Rn, imm12);
@@ -330,12 +327,17 @@ static void LoadStore(uint32_t w, uint64_t addr, Instruction *instr) {
 			} else if (index_pre) {
 				snprintf(instr->text, sizeof(instr->text), "%s%s%s %c%d, [x%d, #%d]!", opname[opc], signExt, sizeSuffix[size], r, Rt, Rn, SignExtend9(imm9));
 				return;
+			} else if (((w >> 21) & 1) == 0 && ((w >> 10) & 3) == 0) {
+				// unscaled offset
+				const char *unscaledName[4] = { "stur", "ldur", "stur", "ldur" };
+				snprintf(instr->text, sizeof(instr->text), "%s%s%s %c%d, [x%d, #%d]", unscaledName[opc], signExt, sizeSuffix[size], r, Rt, Rn, SignExtend9(imm9));
+				return;
 			} else {
 				// register offset
 				int S = (w >> 12) & 1;
 				char index_w = (option & 3) == 2 ? 'w' : 'x';
 				// TODO: Needs index support
-				snprintf(instr->text, sizeof(instr->text), "%s%s %c%d, [x%d + %c%d]", opname[opc], sizeSuffix[size], r, Rt, Rn, index_w, Rm);
+				snprintf(instr->text, sizeof(instr->text), "%s%s%s %c%d, [x%d + %c%d]", opname[opc], signExt, sizeSuffix[size], r, Rt, Rn, index_w, Rm);
 				return;
 			}
 		} else {
@@ -344,7 +346,7 @@ static void LoadStore(uint32_t w, uint64_t addr, Instruction *instr) {
 				size = 4;
 			}
 			char vr = "bhsdq"[size];
-			int imm12 = SignExtend12((w >> 10) & 0xFFF) << size;
+			int imm12 = ((w >> 10) & 0xFFF) << size;
 			if (index_unsigned) {
 				snprintf(instr->text, sizeof(instr->text), "%s %c%d, [x%d, #%d]", opname[opc], vr, Rt, Rn, imm12);
 				return;

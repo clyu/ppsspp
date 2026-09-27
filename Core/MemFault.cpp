@@ -140,9 +140,14 @@ bool HandleFault(uintptr_t hostAddress, void *ctx) {
 	const uintptr_t addressSpaceSize = 0x100000000ULL;
 #endif
 
+	// JIT displacements from a pointerified register don't wrap at 32 bits, so allow a little slack:
+	// down to -256 (LDUR/STUR) and up to 0xFFF * 16 (scaled unsigned offsets).
+	const uintptr_t slackBelow = 0x100;
+	const uintptr_t slackAbove = 0x10000;
+
 	// Check whether hostAddress is within the PSP memory space, which (likely) means it was a guest executable that did the bad access.
 	bool invalidHostAddress = hostAddress == (uintptr_t)0xFFFFFFFFFFFFFFFFULL;
-	if (hostAddress < baseAddress || hostAddress >= baseAddress + addressSpaceSize) {
+	if (hostAddress < baseAddress - slackBelow || hostAddress >= baseAddress + addressSpaceSize + slackAbove) {
 		// Host address outside - this was a different kind of crash.
 		if (!invalidHostAddress) {
 			inCrashHandler = false;
