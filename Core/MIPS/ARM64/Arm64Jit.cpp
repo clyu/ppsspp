@@ -317,28 +317,15 @@ void Arm64Jit::DoJit(u32 em_address, JitBlock *b) {
 
 	// We add a downcount flag check before the block, used when entering from a linked block.
 	// The last block decremented downcounter, and the flag should still be available.
-	// Got three variants here of where we position the code, needs detailed benchmarking.
-
-	FixupBranch bail;
-	if (jo.useBackJump) {
-		// Moves the MOVI2R and B *before* checkedEntry, and just branch backwards there.
-		// Speedup seems to be zero unfortunately but I guess it may vary from device to device.
-		// Not intrusive so keeping it around here to experiment with, may help on ARMv6 due to
-		// large/slow construction of 32-bit immediates?
-		const u8 *backJump = GetCodePtr();
-		MOVI2R(SCRATCH1, js.blockStart);
+	if (jo.enableBlocklink) {
+		// The bail-out goes *before* checkedEntry, so a linked entry only costs a not-taken branch.
+		// UnlinkBlock relies on this exact layout: MOVZ, MOVK, B, then the B.LT at checkedEntry.
+		const u8 *bailStub = GetCodePtr();
+		MOVZ(SCRATCH1, js.blockStart & 0xFFFF);
+		MOVK(SCRATCH1, js.blockStart >> 16, SHIFT_16);
 		B((const void *)outerLoopPCInSCRATCH1);
 		b->checkedEntry = GetCodePtr();
-		B(CC_LT, backJump);
-	} else if (jo.useForwardJump) {
-		b->checkedEntry = GetCodePtr();
-		bail = B(CC_LT);
-	} else if (jo.enableBlocklink) {
-		b->checkedEntry = GetCodePtr();
-		MOVI2R(SCRATCH1, js.blockStart);
-		FixupBranch skip = B(CC_GE);
-		B((const void *)outerLoopPCInSCRATCH1);
-		SetJumpTarget(skip);
+		B(CC_LT, bailStub);
 	} else {
 		// No block linking, no need to add headers to blocks.
 	}
@@ -376,12 +363,6 @@ void Arm64Jit::DoJit(u32 em_address, JitBlock *b) {
 			WriteExit(GetCompilerPC(), js.nextExit++);
 			js.compiling = false;
 		}
-	}
-
-	if (jo.useForwardJump) {
-		SetJumpTarget(bail);
-		MOVI2R(SCRATCH1, js.blockStart);
-		B((const void *)outerLoopPCInSCRATCH1);
 	}
 
 	char temp[256];
@@ -470,20 +451,25 @@ void Arm64Jit::LinkBlock(u8 *exitPoint, const u8 *checkedEntry) {
 
 void Arm64Jit::UnlinkBlock(u8 *checkedEntry, u32 originalAddress) {
 	// Send anyone who tries to run this block back to the dispatcher.
-	// Not entirely ideal, but .. works.
-	// Spurious entrances from previously linked blocks can only come through checkedEntry
+	// Spurious entrances from previously linked blocks can only come through checkedEntry.
+	// The bail stub right before it (see DoJit) already loads originalAddress into SCRATCH1,
+	// so aim its branch at the dispatcher and make checkedEntry always take it.
+	// These two instructions are adjacent, and we never touch the block body.
+	u8 *bailStub = checkedEntry - 12;
+	u8 *stubBranch = checkedEntry - 4;
+	_dbg_assert_msg_(*(const u32 *)bailStub == (0x52800000 | ((originalAddress & 0xFFFF) << 5) | DecodeReg(SCRATCH1)), "UnlinkBlock: unexpected entry layout for %08x", originalAddress);
+
 	if (PlatformIsWXExclusive()) {
-		ProtectMemoryPages(checkedEntry, 16, MEM_PROT_READ | MEM_PROT_WRITE);
+		ProtectMemoryPages(stubBranch, 8, MEM_PROT_READ | MEM_PROT_WRITE);
 	}
 
-	ARM64XEmitter emit(GetCodePtrFromWritablePtr(checkedEntry), checkedEntry);
-	emit.MOVI2R(SCRATCH1, originalAddress);
-	emit.STR(INDEX_UNSIGNED, SCRATCH1, CTXREG, offsetof(MIPSState, pc));
-	emit.B(MIPSComp::jit->GetDispatcher());
+	ARM64XEmitter emit(GetCodePtrFromWritablePtr(stubBranch), stubBranch);
+	emit.B((const void *)dispatcherPCInSCRATCH1);
+	emit.B(GetCodePtrFromWritablePtr(bailStub));
 	emit.FlushIcache();
 
 	if (PlatformIsWXExclusive()) {
-		ProtectMemoryPages(checkedEntry, 16, MEM_PROT_READ | MEM_PROT_EXEC);
+		ProtectMemoryPages(stubBranch, 8, MEM_PROT_READ | MEM_PROT_EXEC);
 	}
 }
 

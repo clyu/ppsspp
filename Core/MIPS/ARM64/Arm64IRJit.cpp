@@ -75,16 +75,18 @@ bool Arm64JitBackend::CompileBlock(IRBlockCache *irBlockCache, int block_num) {
 	u32 startPC = block->GetOriginalStart();
 	bool wroteCheckedOffset = false;
 	if (jo.enableBlocklink && !jo.useBackJump) {
+		// The bail-out goes before the checked entry, so a linked entry only costs a not-taken branch.
+		const u8 *bailStub = GetCodePointer();
+		MOVI2R(SCRATCH1, startPC);
+		B(outerLoopPCInSCRATCH1_);
+
 		SetBlockCheckedOffset(block_num, (int)GetOffset(GetCodePointer()));
 		wroteCheckedOffset = true;
 
 		WriteDebugPC(startPC);
 
 		// Check the sign bit to check if negative.
-		FixupBranch normalEntry = TBZ(DOWNCOUNTREG, 31);
-		MOVI2R(SCRATCH1, startPC);
-		B(outerLoopPCInSCRATCH1_);
-		SetJumpTarget(normalEntry);
+		TBNZ(DOWNCOUNTREG, 31, bailStub);
 	}
 
 	// Don't worry, the codespace isn't large enough to overflow offsets.
