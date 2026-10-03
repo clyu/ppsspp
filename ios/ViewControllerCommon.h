@@ -32,6 +32,8 @@
 - (void)didBecomeActive;
 - (void)willResignActive;
 
+- (void)updateAccelerometer;
+
 - (void)uiStateChanged;
 - (void)pickPhoto:(NSString *)saveFilename requestId:(int)requestId;
 - (void)updateResolutionWithView:(UIView *)view;

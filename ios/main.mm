@@ -438,6 +438,13 @@ void System_Notify(SystemNotification notification) {
 			iOSCoreAudioUpdateSession();
 		});
 		break;
+	case SystemNotification::ACCELEROMETER_NEEDED_CHANGED:
+		dispatch_async(dispatch_get_main_queue(), ^{
+			if (sharedViewController) {
+				[sharedViewController updateAccelerometer];
+			}
+		});
+		break;
 	case SystemNotification::ROTATE_UPDATED:
 	    dispatch_async(dispatch_get_main_queue(), ^{
 			if (sharedViewController) {

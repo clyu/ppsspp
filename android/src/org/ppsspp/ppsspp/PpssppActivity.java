@@ -99,6 +99,8 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 	// For accelerometer sensing.
 	private SensorManager mSensorManager;
 	private Sensor mAccelerometer;
+	private boolean mAccelerometerRegistered;
+	private boolean mResumed;
 
 	private String shortcutParam = "";
 	private static String overrideShortcutParam = null;
@@ -1065,7 +1067,8 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 			mGLSurfaceView.onPause();
 		}
 
-		mSensorManager.unregisterListener(this);
+		mResumed = false;
+		updateAccelerometer();
 
 		loseAudioFocus(this.audioManager, this.audioFocusChangeListener);
 		sizeManager.onPause();
@@ -1094,7 +1097,8 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 
 		gainAudioFocus(this.audioManager, this.audioFocusChangeListener);
 		NativeApp.resume();
-		mSensorManager.registerListener(this, mAccelerometer, SensorManager.SENSOR_DELAY_GAME);
+		mResumed = true;
+		updateAccelerometer();
 
 		InputManager inputManager =
 			(InputManager)getSystemService(Context.INPUT_SERVICE);
@@ -1110,6 +1114,25 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 	}
 
 	// Sensor management
+
+	// Only listen to the accelerometer while we're resumed and the native side has a use for the data
+	// (tilt controls, plugins). Otherwise we'd get woken up 50 times per second for nothing.
+	private void updateAccelerometer() {
+		if (mSensorManager == null || mAccelerometer == null) {
+			return;
+		}
+		boolean enable = mResumed && "1".equals(NativeApp.queryConfig("accelerometerNeeded"));
+		if (enable == mAccelerometerRegistered) {
+			return;
+		}
+		if (enable) {
+			mAccelerometerRegistered = mSensorManager.registerListener(this, mAccelerometer, SensorManager.SENSOR_DELAY_GAME);
+		} else {
+			mSensorManager.unregisterListener(this);
+			mAccelerometerRegistered = false;
+		}
+	}
+
 	@Override
 	public void onAccuracyChanged(Sensor sensor, int arg1) {}
 
@@ -1705,6 +1728,9 @@ public class PpssppActivity extends AppCompatActivity implements SensorEventList
 			return true;
 		} else if (command.equals("sustainedPerfMode")) {
 			updateSustainedPerformanceMode();
+			return true;
+		} else if (command.equals("accelerometer")) {
+			updateAccelerometer();
 			return true;
 		} else if (command.equals("immersive")) {
 			updateSystemUiVisibility();

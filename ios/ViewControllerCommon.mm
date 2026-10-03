@@ -24,6 +24,7 @@
 @property (strong, nonatomic) NSOperationQueue *accelerometerQueue;
 @property (nonatomic) GCController *gameController __attribute__((weak_import));
 @property (strong, nonatomic) CMMotionManager *motionManager;
+@property (nonatomic) BOOL appActive;
 
 @end
 
@@ -101,7 +102,27 @@ static int GetPickerRequestId(id picker) {
 }
 
 - (void)didBecomeActive {
-	if (self.motionManager.accelerometerAvailable) {
+	self.appActive = YES;
+	[self updateAccelerometer];
+}
+
+- (void)willResignActive {
+	self.appActive = NO;
+	[self updateAccelerometer];
+}
+
+// Only run the accelerometer while we're active and the native side has a use for the data
+// (tilt controls, plugins). Otherwise we'd get woken up 60 times per second for nothing.
+- (void)updateAccelerometer {
+	BOOL enable = self.appActive && NativeAccelerometerNeeded();
+	if (enable == self.motionManager.accelerometerActive) {
+		return;
+	}
+
+	if (!enable) {
+		INFO_LOG(Log::G3D, "Stopping accelerometer updates");
+		[self.motionManager stopAccelerometerUpdates];
+	} else if (self.motionManager.accelerometerAvailable) {
 		self.motionManager.accelerometerUpdateInterval = 1.0 / 60.0;
 		INFO_LOG(Log::G3D, "Starting accelerometer updates.");
 
@@ -115,14 +136,6 @@ static int GetPickerRequestId(id picker) {
 		}];
 	} else {
 		INFO_LOG(Log::G3D, "No accelerometer available, not starting updates.");
-	}
-}
-
-- (void)willResignActive {
-	// Stop accelerometer updates
-	if (self.motionManager.accelerometerActive) {
-		INFO_LOG(Log::G3D, "Stopping accelerometer updates");
-		[self.motionManager stopAccelerometerUpdates];
 	}
 }
 

@@ -52,6 +52,9 @@ void NativeTouch(const TouchInput &touch);
 bool NativeKey(const KeyInput &key);
 void NativeAxis(const AxisInput *axis, size_t count);
 void NativeAccelerometer(float tiltX, float tiltY, float tiltZ);
+// If this returns false, NativeAccelerometer has no use for the data, so the sensor can be left off to save power.
+// SystemNotification::ACCELEROMETER_NEEDED_CHANGED is sent when the answer changes.
+bool NativeAccelerometerNeeded();
 void NativeMouseDelta(float dx, float dy);
 
 // Called when it's process a frame, including rendering. If the device can keep up, this

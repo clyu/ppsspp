@@ -1031,6 +1031,14 @@ void NativeFrame(GraphicsContext *graphicsContext) {
 		g_audioBackend->FrameUpdate(g_Config.bAutoSwitchAudioDevice);
 	}
 
+	// This depends on settings that can change from many places (settings UI, hotkey, per-game config,
+	// plugins loading), so we just poll and let the platform know when to turn the sensor on or off.
+	static bool accelerometerNeeded = false;
+	if (accelerometerNeeded != NativeAccelerometerNeeded()) {
+		accelerometerNeeded = !accelerometerNeeded;
+		System_Notify(SystemNotification::ACCELEROMETER_NEEDED_CHANGED);
+	}
+
 	// NOTE: We must begin the frame before update, so we can do texture size queries and stuff in Measure etc.
 	Draw::DebugFlags debugFlags = Draw::DebugFlags::NONE;
 	if ((DebugOverlay)g_Config.iDebugOverlay == DebugOverlay::GPU_PROFILE)
@@ -1409,6 +1417,15 @@ void NativeMouseDelta(float dx, float dy) {
 	MouseEventProcessor::ProcessDelta(time_now_d(), dx, dy);
 
 	SendMouseDeltaAxis();
+}
+
+bool NativeAccelerometerNeeded() {
+	if (g_Config.iTiltInputType == TILT_NULL) {
+		// NativeAccelerometer drops everything in this case.
+		return false;
+	}
+	// Apart from tilt input, plugins can read the raw axes.
+	return g_Config.bTiltInputEnabled || HLEPlugins::HasEnabled();
 }
 
 // TODO: Should include a device ID here, since accelerometers can be on pads for example (DualSense).

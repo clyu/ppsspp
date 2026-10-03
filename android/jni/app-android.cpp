@@ -649,6 +649,8 @@ static std::string QueryConfig(std::string_view query) {
 		return g_Config.GetDisplayLayoutConfig(g_display.GetDeviceOrientation()).bImmersiveMode ? "1" : "0";
 	} else if (query == "sustainedPerformanceMode") {
 		return g_Config.bSustainedPerformanceMode ? "1" : "0";
+	} else if (query == "accelerometerNeeded") {
+		return NativeAccelerometerNeeded() ? "1" : "0";
 	} else if (query == "androidJavaGL") {
 		// If we're using Vulkan, we say no... need C++ to use Vulkan.
 		if (GetGPUBackend() == GPUBackend::VULKAN) {
@@ -1114,6 +1116,9 @@ void System_Notify(SystemNotification notification) {
 		break;
 	case SystemNotification::SUSTAINED_PERF_CHANGE:
 		PushCommand("sustainedPerfMode", "");
+		break;
+	case SystemNotification::ACCELEROMETER_NEEDED_CHANGED:
+		PushCommand("accelerometer", "");
 		break;
 	case SystemNotification::TEST_JAVA_EXCEPTION:
 		PushCommand("testException", "This is a test exception");

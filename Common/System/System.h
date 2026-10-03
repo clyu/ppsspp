@@ -268,6 +268,7 @@ enum class SystemNotification {
 	AUDIO_MODE_CHANGED,
 	APP_SWITCH_MODE_CHANGED,
 	PAD_STATE_CHANGED,
+	ACCELEROMETER_NEEDED_CHANGED,  // The platform should re-check NativeAccelerometerNeeded().
 };
 
 // I guess it's not super great architecturally to centralize this, since it's not general - but same with a lot of
