@@ -26,11 +26,13 @@
 
 
 #include <algorithm>  // find_if
+#include <chrono>
+#include <condition_variable>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <thread>
 
-#include "Common/TimeUtil.h"
 #include "Common/Data/Text/I18n.h"
 #include "Common/Thread/ThreadUtil.h"
 #include "Common/System/OSD.h"
@@ -46,6 +48,8 @@ PortManager g_PortManager;
 bool upnpServiceRunning = false;
 std::thread upnpServiceThread;
 std::recursive_mutex upnpLock;
+// Wakes up the service thread. Protected by upnpLock.
+std::condition_variable_any upnpCond;
 std::deque<UPnPArgs> upnpReqs;
 
 PortManager::PortManager(): 
@@ -474,14 +478,31 @@ int upnpService(const unsigned int timeout) {
 	SetCurrentThreadName("UPnPService");
 	INFO_LOG(Log::sceNet, "UPnPService: Begin of UPnPService Thread");
 
+	// Set when the last attempt failed, so we hold off a bit before retrying instead of spinning.
+	bool failed = false;
+
 	// Service Loop
 	while (upnpServiceRunning) {
-		// Sleep for 1ms for faster response if active, otherwise sleep longer (TODO: Improve on this).
-		sleep_ms(g_Config.bEnableUPnP ? 1 : 500, "upnp-poll");
+		{
+			// Sleep until there's something to do. Nothing notifies us when bEnableUPnP changes, so we
+			// still wake up now and then to check. That's also how long we wait before retrying after a failure.
+			std::unique_lock<std::recursive_mutex> upnpGuard(upnpLock);
+			upnpCond.wait_for(upnpGuard, std::chrono::milliseconds(500), [&] {
+				if (!upnpServiceRunning)
+					return true;
+				if (failed || !g_Config.bEnableUPnP)
+					return false;
+				const int state = g_PortManager.GetInitState();
+				return state == UPNP_INITSTATE_NONE || (state == UPNP_INITSTATE_DONE && !upnpReqs.empty());
+			});
+			if (!upnpServiceRunning)
+				break;
+		}
+		failed = false;
 
 		// Attempts to reconnect if not connected yet or got disconnected
 		if (g_Config.bEnableUPnP && g_PortManager.GetInitState() == UPNP_INITSTATE_NONE) {
-			g_PortManager.Initialize(timeout);
+			failed = !g_PortManager.Initialize(timeout);
 		}
 
 		if (g_Config.bEnableUPnP && g_PortManager.GetInitState() == UPNP_INITSTATE_DONE && !upnpReqs.empty()) {
@@ -506,7 +527,9 @@ int upnpService(const unsigned int timeout) {
                 upnpLock.lock();
                 upnpReqs.pop_front();
                 upnpLock.unlock();
-            }
+			} else {
+				failed = true;
+			}
 		}
 	}
 
@@ -533,7 +556,11 @@ void __UPnPInit(const int timeout_ms) {
 
 void __UPnPShutdown() {
 	if (upnpServiceRunning) {
-		upnpServiceRunning = false;
+		{
+			std::lock_guard<std::recursive_mutex> upnpGuard(upnpLock);
+			upnpServiceRunning = false;
+		}
+		upnpCond.notify_one();
 		if (upnpServiceThread.joinable()) {
 			upnpServiceThread.join();
 		}
@@ -543,10 +570,12 @@ void __UPnPShutdown() {
 void UPnP_Add(const char* protocol, unsigned short port, unsigned short intport) {
 	std::lock_guard<std::recursive_mutex> upnpGuard(upnpLock);
 	upnpReqs.push_back({ UPNP_CMD_ADD, protocol, port, intport });
+	upnpCond.notify_one();
 }
 
 void UPnP_Remove(const char* protocol, unsigned short port) {
 	std::lock_guard<std::recursive_mutex> upnpGuard(upnpLock);
 	upnpReqs.push_back({ UPNP_CMD_REMOVE, protocol, port, port });
+	upnpCond.notify_one();
 }
 
