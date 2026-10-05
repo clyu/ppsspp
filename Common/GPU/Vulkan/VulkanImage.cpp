@@ -19,6 +19,9 @@ void VulkanTexture::Wipe() {
 	if (view_ != VK_NULL_HANDLE) {
 		vulkan_->Delete().QueueDeleteImageView(view_);
 	}
+	if (arrayView_ != VK_NULL_HANDLE) {
+		vulkan_->Delete().QueueDeleteImageView(arrayView_);
+	}
 	if (image_ != VK_NULL_HANDLE) {
 		_dbg_assert_(allocation_ != VK_NULL_HANDLE);
 		vulkan_->Delete().QueueDeleteImageAllocation(image_, allocation_);
