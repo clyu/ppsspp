@@ -111,9 +111,10 @@ void VulkanBarrierBatch::TransitionColorImageAuto(
 		break;
 	default:
 		_dbg_assert_msg_(false, "Unexpected oldLayout: %s", VulkanImageLayoutToString(*imageLayout));
-		// Sync hard.
+		// Sync hard. Needs to be ALL_COMMANDS for the access mask to be valid and for us to actually wait
+		// for anything, and it's OR-ed in so we don't drop the stages of the other barriers in the batch.
 		srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
-		srcStageMask_ = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+		srcStageMask_ |= VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
 		break;
 	}
 
@@ -143,7 +144,7 @@ void VulkanBarrierBatch::TransitionColorImageAuto(
 		_dbg_assert_msg_(false, "Unexpected newLayout: %s", VulkanImageLayoutToString(newImageLayout));
 		// Sync hard.
 		dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
-		dstStageMask_ = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+		dstStageMask_ |= VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
 		break;
 	}
 
@@ -197,8 +198,8 @@ void VulkanBarrierBatch::TransitionDepthStencilImageAuto(
 	default:
 		_dbg_assert_msg_(false, "Unexpected oldLayout: %s", VulkanImageLayoutToString(*imageLayout));
 		// Sync hard.
-		srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
-		srcStageMask_ = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+		srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
+		srcStageMask_ |= VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
 		break;
 	}
 
@@ -222,8 +223,8 @@ void VulkanBarrierBatch::TransitionDepthStencilImageAuto(
 	default:
 		_dbg_assert_msg_(false, "Unexpected newLayout: %s", VulkanImageLayoutToString(newImageLayout));
 		// Sync hard.
-		dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
-		dstStageMask_ = VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT;
+		dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
+		dstStageMask_ |= VK_PIPELINE_STAGE_ALL_COMMANDS_BIT;
 		break;
 	}
 
