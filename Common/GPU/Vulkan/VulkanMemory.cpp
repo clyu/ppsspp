@@ -157,7 +157,8 @@ void VulkanPushPool::NextBlock(VkDeviceSize allocationSize) {
 	while (curBlockIndex_ < blocks_.size()) {
 		Block &block = blocks_[curBlockIndex_];
 		// Grab the first matching block, or unused block (frameIndex == -1).
-		if ((block.frameIndex == curFrameIndex || block.frameIndex == -1) && block.size >= allocationSize) {
+		// Like in Allocate, there has to be room for the slack after the allocation.
+		if ((block.frameIndex == curFrameIndex || block.frameIndex == -1) && block.size >= allocationSize + slack_) {
 			_assert_(block.used == 0);
 			block.used = allocationSize;
 			block.lastUsed = time_now_d();
@@ -169,7 +170,8 @@ void VulkanPushPool::NextBlock(VkDeviceSize allocationSize) {
 	}
 
 	double start = time_now_d();
-	VkDeviceSize newBlockSize = std::max(originalBlockSize_ * 2, (VkDeviceSize)RoundToNextPowerOf2((uint32_t)allocationSize));
+	// The slack goes on top, so that power-of-two sized allocations (say, a 2048x2048 texture) don't double the block.
+	VkDeviceSize newBlockSize = std::max(originalBlockSize_ * 2, (VkDeviceSize)RoundToNextPowerOf2((uint32_t)allocationSize) + slack_);
 
 	// We're still here and ran off the end of blocks. Create a new one.
 	blocks_.push_back(CreateBlock(newBlockSize));
