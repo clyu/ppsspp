@@ -145,7 +145,7 @@ void VulkanPushPool::BeginFrame() {
 		size_t size = blocks_.back().size;
 		blocks_.back().Destroy(vulkan_);
 		blocks_.pop_back();
-		DEBUG_LOG(Log::G3D, "%s: Garbage collected block of size %s in %0.2f ms", name_, NiceSizeFormat(size).c_str(), time_now_d() - start);
+		DEBUG_LOG(Log::G3D, "%s: Garbage collected block of size %s in %0.2f ms", name_, NiceSizeFormat(size).c_str(), 1000.0 * (time_now_d() - start));
 	}
 }
 
