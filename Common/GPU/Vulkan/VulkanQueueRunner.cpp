@@ -1112,6 +1112,9 @@ void VulkanQueueRunner::PerformRenderPass(const VKRStep &step, VkCommandBuffer c
 					pipelineOK = true;
 				} else {
 					pipelineOK = false;
+					// Make sure a later bind of the pipeline that's still bound doesn't get skipped as redundant,
+					// that's what turns pipelineOK back on.
+					lastGraphicsPipeline = nullptr;
 				}
 
 				// Reset dynamic state so it gets refreshed with the new pipeline.
