@@ -1166,29 +1166,8 @@ void VulkanRenderManager::BindFramebufferAsRenderTarget(VKRFramebuffer *fb, VKRR
 bool VulkanRenderManager::CopyFramebufferToMemory(VKRFramebuffer *src, VkImageAspectFlags aspectBits, int x, int y, int w, int h, Draw::DataFormat destFormat, uint8_t *pixels, int pixelStride, Draw::ReadbackMode mode, const char *tag) {
 	_dbg_assert_(insideFrame_);
 
-	for (int i = (int)steps_.size() - 1; i >= 0; i--) {
-		if (steps_[i]->stepType == VKRStepType::RENDER && steps_[i]->render.framebuffer == src) {
-			steps_[i]->render.numReads++;
-			break;
-		}
-	}
-
-	EndCurRenderStep();
-
-	VKRStep *step = new VKRStep{ VKRStepType::READBACK };
-	step->readback.aspectMask = aspectBits;
-	step->readback.src = src;
-	step->readback.srcRect.offset = { x, y };
-	step->readback.srcRect.extent = { (uint32_t)w, (uint32_t)h };
-	step->readback.delayed = mode == Draw::ReadbackMode::OLD_DATA_OK;
-	step->dependencies.insert(src);
-	step->tag = tag;
-	steps_.push_back(step);
-
-	if (mode == Draw::ReadbackMode::BLOCK) {
-		FlushSync();
-	}
-
+	// Figure out the source format first. This is also where we find out that we can't read from the
+	// backbuffer at all, and that has to happen before we queue up (and possibly run) a copy from it.
 	Draw::DataFormat srcFormat = Draw::DataFormat::UNDEFINED;
 	if (aspectBits & VK_IMAGE_ASPECT_COLOR_BIT) {
 		if (src) {
@@ -1223,6 +1202,29 @@ bool VulkanRenderManager::CopyFramebufferToMemory(VKRFramebuffer *src, VkImageAs
 		}
 	} else {
 		_assert_(false);
+	}
+
+	for (int i = (int)steps_.size() - 1; i >= 0; i--) {
+		if (steps_[i]->stepType == VKRStepType::RENDER && steps_[i]->render.framebuffer == src) {
+			steps_[i]->render.numReads++;
+			break;
+		}
+	}
+
+	EndCurRenderStep();
+
+	VKRStep *step = new VKRStep{ VKRStepType::READBACK };
+	step->readback.aspectMask = aspectBits;
+	step->readback.src = src;
+	step->readback.srcRect.offset = { x, y };
+	step->readback.srcRect.extent = { (uint32_t)w, (uint32_t)h };
+	step->readback.delayed = mode == Draw::ReadbackMode::OLD_DATA_OK;
+	step->dependencies.insert(src);
+	step->tag = tag;
+	steps_.push_back(step);
+
+	if (mode == Draw::ReadbackMode::BLOCK) {
+		FlushSync();
 	}
 
 	// Need to call this after FlushSync so the pixels are guaranteed to be ready in CPU-accessible VRAM.
