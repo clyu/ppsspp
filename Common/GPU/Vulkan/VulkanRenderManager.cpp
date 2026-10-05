@@ -1315,12 +1315,20 @@ void VulkanRenderManager::Clear(uint32_t clearColor, float clearZ, int clearSten
 	// If this is the first drawing command or clears everything, merge it into the pass.
 	int allAspects = VK_IMAGE_ASPECT_COLOR_BIT | VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
 	if (curRenderStep_->render.numDraws == 0 || clearMask == allAspects) {
-		curRenderStep_->render.clearColor = clearColor;
-		curRenderStep_->render.clearDepth = clearZ;
-		curRenderStep_->render.clearStencil = clearStencil;
-		curRenderStep_->render.colorLoad = (clearMask & VK_IMAGE_ASPECT_COLOR_BIT) ? VKRRenderPassLoadAction::CLEAR : VKRRenderPassLoadAction::KEEP;
-		curRenderStep_->render.depthLoad = (clearMask & VK_IMAGE_ASPECT_DEPTH_BIT) ? VKRRenderPassLoadAction::CLEAR : VKRRenderPassLoadAction::KEEP;
-		curRenderStep_->render.stencilLoad = (clearMask & VK_IMAGE_ASPECT_STENCIL_BIT) ? VKRRenderPassLoadAction::CLEAR : VKRRenderPassLoadAction::KEEP;
+		// Only touch the aspects we were asked to clear. The others must keep the load action they already
+		// have, which may well be a clear requested by the bind or by an earlier partial clear.
+		if (clearMask & VK_IMAGE_ASPECT_COLOR_BIT) {
+			curRenderStep_->render.clearColor = clearColor;
+			curRenderStep_->render.colorLoad = VKRRenderPassLoadAction::CLEAR;
+		}
+		if (clearMask & VK_IMAGE_ASPECT_DEPTH_BIT) {
+			curRenderStep_->render.clearDepth = clearZ;
+			curRenderStep_->render.depthLoad = VKRRenderPassLoadAction::CLEAR;
+		}
+		if (clearMask & VK_IMAGE_ASPECT_STENCIL_BIT) {
+			curRenderStep_->render.clearStencil = clearStencil;
+			curRenderStep_->render.stencilLoad = VKRRenderPassLoadAction::CLEAR;
+		}
 
 		if (clearMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) {
 			if (curRenderStep_->render.framebuffer && !curRenderStep_->render.framebuffer->HasDepth()) {
