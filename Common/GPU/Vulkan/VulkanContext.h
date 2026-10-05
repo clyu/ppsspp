@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -112,31 +113,35 @@ class VulkanDeleteList {
 
 public:
 	// NOTE: These all take reference handles so they can zero the input value.
-	void QueueDeleteCommandPool(VkCommandPool &pool) { _dbg_assert_(pool != VK_NULL_HANDLE); cmdPools_.push_back(pool); pool = VK_NULL_HANDLE; }
-	void QueueDeleteDescriptorPool(VkDescriptorPool &pool) { _dbg_assert_(pool != VK_NULL_HANDLE); descPools_.push_back(pool); pool = VK_NULL_HANDLE; }
-	void QueueDeleteShaderModule(VkShaderModule &module) { _dbg_assert_(module != VK_NULL_HANDLE); modules_.push_back(module); module = VK_NULL_HANDLE; }
-	void QueueDeleteBuffer(VkBuffer &buffer) { _dbg_assert_(buffer != VK_NULL_HANDLE); buffers_.push_back(buffer); buffer = VK_NULL_HANDLE; }
-	void QueueDeleteBufferView(VkBufferView &bufferView) { _dbg_assert_(bufferView != VK_NULL_HANDLE); bufferViews_.push_back(bufferView); bufferView = VK_NULL_HANDLE; }
-	void QueueDeleteImageView(VkImageView &imageView) { _dbg_assert_(imageView != VK_NULL_HANDLE); imageViews_.push_back(imageView); imageView = VK_NULL_HANDLE; }
-	void QueueDeleteDeviceMemory(VkDeviceMemory &deviceMemory) { _dbg_assert_(deviceMemory != VK_NULL_HANDLE); deviceMemory_.push_back(deviceMemory); deviceMemory = VK_NULL_HANDLE; }
-	void QueueDeleteSampler(VkSampler &sampler) { _dbg_assert_(sampler != VK_NULL_HANDLE); samplers_.push_back(sampler); sampler = VK_NULL_HANDLE; }
-	void QueueDeletePipeline(VkPipeline &pipeline) { _dbg_assert_(pipeline != VK_NULL_HANDLE); pipelines_.push_back(pipeline); pipeline = VK_NULL_HANDLE; }
-	void QueueDeletePipelineCache(VkPipelineCache &pipelineCache) { _dbg_assert_(pipelineCache != VK_NULL_HANDLE); pipelineCaches_.push_back(pipelineCache); pipelineCache = VK_NULL_HANDLE; }
-	void QueueDeleteRenderPass(VkRenderPass &renderPass) { _dbg_assert_(renderPass != VK_NULL_HANDLE); renderPasses_.push_back(renderPass); renderPass = VK_NULL_HANDLE; }
-	void QueueDeleteFramebuffer(VkFramebuffer &framebuffer) { _dbg_assert_(framebuffer != VK_NULL_HANDLE); framebuffers_.push_back(framebuffer); framebuffer = VK_NULL_HANDLE; }
-	void QueueDeletePipelineLayout(VkPipelineLayout &pipelineLayout) { _dbg_assert_(pipelineLayout != VK_NULL_HANDLE); pipelineLayouts_.push_back(pipelineLayout); pipelineLayout = VK_NULL_HANDLE; }
-	void QueueDeleteDescriptorSetLayout(VkDescriptorSetLayout &descSetLayout) { _dbg_assert_(descSetLayout != VK_NULL_HANDLE); descSetLayouts_.push_back(descSetLayout); descSetLayout = VK_NULL_HANDLE; }
-	void QueueDeleteQueryPool(VkQueryPool &queryPool) { _dbg_assert_(queryPool != VK_NULL_HANDLE); queryPools_.push_back(queryPool); queryPool = VK_NULL_HANDLE; }
-	void QueueCallback(void (*func)(VulkanContext *vulkan, void *userdata), void *userdata) { callbacks_.push_back(Callback(func, userdata)); }
+	// They can be called from any thread. Nearly everything is queued up by the thread recording the frame, but
+	// the render thread has a few things to get rid of too, like descriptor pools that it had to grow.
+	void QueueDeleteCommandPool(VkCommandPool &pool) { _dbg_assert_(pool != VK_NULL_HANDLE); std::lock_guard<std::mutex> guard(lock_); cmdPools_.push_back(pool); pool = VK_NULL_HANDLE; }
+	void QueueDeleteDescriptorPool(VkDescriptorPool &pool) { _dbg_assert_(pool != VK_NULL_HANDLE); std::lock_guard<std::mutex> guard(lock_); descPools_.push_back(pool); pool = VK_NULL_HANDLE; }
+	void QueueDeleteShaderModule(VkShaderModule &module) { _dbg_assert_(module != VK_NULL_HANDLE); std::lock_guard<std::mutex> guard(lock_); modules_.push_back(module); module = VK_NULL_HANDLE; }
+	void QueueDeleteBuffer(VkBuffer &buffer) { _dbg_assert_(buffer != VK_NULL_HANDLE); std::lock_guard<std::mutex> guard(lock_); buffers_.push_back(buffer); buffer = VK_NULL_HANDLE; }
+	void QueueDeleteBufferView(VkBufferView &bufferView) { _dbg_assert_(bufferView != VK_NULL_HANDLE); std::lock_guard<std::mutex> guard(lock_); bufferViews_.push_back(bufferView); bufferView = VK_NULL_HANDLE; }
+	void QueueDeleteImageView(VkImageView &imageView) { _dbg_assert_(imageView != VK_NULL_HANDLE); std::lock_guard<std::mutex> guard(lock_); imageViews_.push_back(imageView); imageView = VK_NULL_HANDLE; }
+	void QueueDeleteDeviceMemory(VkDeviceMemory &deviceMemory) { _dbg_assert_(deviceMemory != VK_NULL_HANDLE); std::lock_guard<std::mutex> guard(lock_); deviceMemory_.push_back(deviceMemory); deviceMemory = VK_NULL_HANDLE; }
+	void QueueDeleteSampler(VkSampler &sampler) { _dbg_assert_(sampler != VK_NULL_HANDLE); std::lock_guard<std::mutex> guard(lock_); samplers_.push_back(sampler); sampler = VK_NULL_HANDLE; }
+	void QueueDeletePipeline(VkPipeline &pipeline) { _dbg_assert_(pipeline != VK_NULL_HANDLE); std::lock_guard<std::mutex> guard(lock_); pipelines_.push_back(pipeline); pipeline = VK_NULL_HANDLE; }
+	void QueueDeletePipelineCache(VkPipelineCache &pipelineCache) { _dbg_assert_(pipelineCache != VK_NULL_HANDLE); std::lock_guard<std::mutex> guard(lock_); pipelineCaches_.push_back(pipelineCache); pipelineCache = VK_NULL_HANDLE; }
+	void QueueDeleteRenderPass(VkRenderPass &renderPass) { _dbg_assert_(renderPass != VK_NULL_HANDLE); std::lock_guard<std::mutex> guard(lock_); renderPasses_.push_back(renderPass); renderPass = VK_NULL_HANDLE; }
+	void QueueDeleteFramebuffer(VkFramebuffer &framebuffer) { _dbg_assert_(framebuffer != VK_NULL_HANDLE); std::lock_guard<std::mutex> guard(lock_); framebuffers_.push_back(framebuffer); framebuffer = VK_NULL_HANDLE; }
+	void QueueDeletePipelineLayout(VkPipelineLayout &pipelineLayout) { _dbg_assert_(pipelineLayout != VK_NULL_HANDLE); std::lock_guard<std::mutex> guard(lock_); pipelineLayouts_.push_back(pipelineLayout); pipelineLayout = VK_NULL_HANDLE; }
+	void QueueDeleteDescriptorSetLayout(VkDescriptorSetLayout &descSetLayout) { _dbg_assert_(descSetLayout != VK_NULL_HANDLE); std::lock_guard<std::mutex> guard(lock_); descSetLayouts_.push_back(descSetLayout); descSetLayout = VK_NULL_HANDLE; }
+	void QueueDeleteQueryPool(VkQueryPool &queryPool) { _dbg_assert_(queryPool != VK_NULL_HANDLE); std::lock_guard<std::mutex> guard(lock_); queryPools_.push_back(queryPool); queryPool = VK_NULL_HANDLE; }
+	void QueueCallback(void (*func)(VulkanContext *vulkan, void *userdata), void *userdata) { std::lock_guard<std::mutex> guard(lock_); callbacks_.push_back(Callback(func, userdata)); }
 
 	void QueueDeleteBufferAllocation(VkBuffer &buffer, VmaAllocation &alloc) { 
 		_dbg_assert_(buffer != VK_NULL_HANDLE); 
+		std::lock_guard<std::mutex> guard(lock_);
 		buffersWithAllocs_.push_back(BufferWithAlloc{ buffer, alloc });
 		buffer = VK_NULL_HANDLE;
 		alloc = VK_NULL_HANDLE;
 	}
 	void QueueDeleteImageAllocation(VkImage &image, VmaAllocation &alloc) {
 		_dbg_assert_(image != VK_NULL_HANDLE && alloc != VK_NULL_HANDLE);
+		std::lock_guard<std::mutex> guard(lock_);
 		imagesWithAllocs_.push_back(ImageWithAlloc{ image, alloc });
 		image = VK_NULL_HANDLE;
 		alloc = VK_NULL_HANDLE;
@@ -150,6 +155,9 @@ public:
 	}
 
 private:
+	// Protects the queueing only. Take locks the list that it empties.
+	std::mutex lock_;
+
 	std::vector<VkCommandPool> cmdPools_;
 	std::vector<VkDescriptorPool> descPools_;
 	std::vector<VkShaderModule> modules_;

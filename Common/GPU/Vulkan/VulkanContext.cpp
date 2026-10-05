@@ -1728,6 +1728,8 @@ void VulkanDeleteList::Take(VulkanDeleteList &del) {
 	_dbg_assert_(pipelineLayouts_.empty());
 	_dbg_assert_(descSetLayouts_.empty());
 	_dbg_assert_(callbacks_.empty());
+	// del is the list things get queued on, possibly from another thread right now.
+	std::lock_guard<std::mutex> guard(del.lock_);
 	cmdPools_ = std::move(del.cmdPools_);
 	descPools_ = std::move(del.descPools_);
 	modules_ = std::move(del.modules_);
