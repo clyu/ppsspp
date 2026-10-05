@@ -1,5 +1,7 @@
 #pragma once
 
+#include <mutex>
+
 #include "Common/Common.h"
 #include "Common/GPU/Vulkan/VulkanContext.h"
 
@@ -153,6 +155,8 @@ public:
 	}
 
 private:
+	// Get() creates the passes lazily, and gets called from both the recording and the render thread.
+	std::mutex mutex_;
 	// TODO: Might be better off with a hashmap once the render pass type count grows really large..
 	VkRenderPass pass[(size_t)RenderPassType::TYPE_COUNT]{};
 	VkSampleCountFlagBits sampleCounts[(size_t)RenderPassType::TYPE_COUNT]{};

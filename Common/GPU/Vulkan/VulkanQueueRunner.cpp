@@ -195,6 +195,9 @@ void VulkanQueueRunner::DestroyBackBuffers() {
 // Self-dependency: https://github.com/gpuweb/gpuweb/issues/442#issuecomment-547604827
 // Also see https://www.khronos.org/registry/vulkan/specs/1.3-extensions/html/vkspec.html#synchronization-pipeline-barriers-subpass-self-dependencies
 VKRRenderPass *VulkanQueueRunner::GetRenderPass(const RPKey &key) {
+	// Called both while recording steps and while running them, which are different threads
+	// when the render thread is enabled.
+	std::lock_guard<std::mutex> guard(renderPassesMutex_);
 	VKRRenderPass *foundPass;
 	if (renderPasses_.Get(key, &foundPass)) {
 		return foundPass;
