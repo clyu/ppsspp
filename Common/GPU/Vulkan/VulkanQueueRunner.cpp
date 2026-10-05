@@ -329,6 +329,12 @@ void VulkanQueueRunner::RunSteps(std::vector<VKRStep *> &steps, int curFrame, Fr
 							SetBackbuffer(framebuffers_[frameData.curSwapchainImage], frameDataShared.swapchainImages_[frameData.curSwapchainImage].image);
 						}
 					}
+					// If we failed to acquire, backbuffer_ still points at an image we don't own - or, if the
+					// swapchain was just recreated, at one that's already gone. The frame has been flagged to
+					// not get presented anyway, so don't draw to it.
+					if (!frameData.hasAcquired) {
+						perform = false;
+					}
 
 					if (!frameData.hasPresentCommands) {
 						// A RENDER step rendering to the backbuffer is normally the last step that happens in a frame,
