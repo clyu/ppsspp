@@ -188,6 +188,10 @@ void VKRGraphicsPipeline::DestroyVariants(VulkanContext *vulkan, bool msaaOnly) 
 		if (pipeline) {
 			vulkan->Delete().QueueDeletePipeline(pipeline);
 		}
+		// The promise goes the same way as the pipeline, a frame still in flight may be looking at it.
+		vulkan->Delete().QueueCallback([](VulkanContext *vulkan, void *p) {
+			delete (Promise<VkPipeline> *)p;
+		}, this->pipeline[i]);
 		this->pipeline[i] = nullptr;
 	}
 	sampleCount_ = VK_SAMPLE_COUNT_FLAG_BITS_MAX_ENUM;
