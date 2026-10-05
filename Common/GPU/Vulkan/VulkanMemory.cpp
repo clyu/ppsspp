@@ -220,8 +220,8 @@ void VulkanBuffer::Create(VulkanContext *vulkan, const char *name, VkDeviceSize 
 	b.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 	VmaAllocationCreateInfo allocCreateInfo{};
 
+	// We never map this, it gets filled by a copy. So no need to restrict ourselves to host-visible memory.
 	allocCreateInfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-	allocCreateInfo.requiredFlags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;  // required to not get memory where we have to manually flush.
 	VmaAllocationInfo allocInfo{};
 
 	VkResult result = vmaCreateBuffer(vulkan->Allocator(), &b, &allocCreateInfo, &buffer_, &allocation_, &allocInfo);
