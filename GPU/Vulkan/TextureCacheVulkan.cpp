@@ -852,6 +852,10 @@ void TextureCacheVulkan::BuildTexture(TexCacheEntry *const entry) {
 		VkBuffer texBuf;
 		// NVIDIA reports a min alignment of 1 but that can't be healthy... let's align by 16 as a minimum.
 		int pushAlignment = std::max(16, (int)vulkan->GetPhysicalDeviceProperties().properties.limits.optimalBufferCopyOffsetAlignment);
+		if (computeUpload) {
+			// The scaling shaders read the level straight out of the push buffer, bound as a storage buffer.
+			pushAlignment = std::max(pushAlignment, (int)vulkan->GetPhysicalDeviceProperties().properties.limits.minStorageBufferOffsetAlignment);
+		}
 		void *data;
 		std::vector<uint8_t> saveData;
 
