@@ -644,5 +644,9 @@ private:
 	HistoryBuffer<FrameTimeData, FRAME_TIME_HISTORY_LENGTH> &frameTimeHistory_;
 
 	VKRPipelineLayout *curPipelineLayout_ = nullptr;
+
+	// The list is walked both by the thread recording frames and by the render thread, while layouts get
+	// registered from whichever thread creates the GPU backend - when booting a game, that's the loader thread.
+	std::mutex pipelineLayoutsMutex_;
 	std::vector<VKRPipelineLayout *> pipelineLayouts_;
 };

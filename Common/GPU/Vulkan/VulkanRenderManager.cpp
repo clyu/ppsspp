@@ -1823,15 +1823,19 @@ VKRPipelineLayout *VulkanRenderManager::CreatePipelineLayout(BindingType *bindin
 		layout->frameData[i].pool.Create(vulkan_, bindingTypes, (uint32_t)bindingTypesCount, 1024);
 	}
 
+	std::lock_guard<std::mutex> guard(pipelineLayoutsMutex_);
 	pipelineLayouts_.push_back(layout);
 	return layout;
 }
 
 void VulkanRenderManager::DestroyPipelineLayout(VKRPipelineLayout *layout) {
-	for (auto iter = pipelineLayouts_.begin(); iter != pipelineLayouts_.end(); iter++) {
-		if (*iter == layout) {
-			pipelineLayouts_.erase(iter);
-			break;
+	{
+		std::lock_guard<std::mutex> guard(pipelineLayoutsMutex_);
+		for (auto iter = pipelineLayouts_.begin(); iter != pipelineLayouts_.end(); iter++) {
+			if (*iter == layout) {
+				pipelineLayouts_.erase(iter);
+				break;
+			}
 		}
 	}
 	vulkan_->Delete().QueueCallback([](VulkanContext *vulkan, void *userdata) {
@@ -1847,12 +1851,21 @@ void VulkanRenderManager::DestroyPipelineLayout(VKRPipelineLayout *layout) {
 }
 
 void VulkanRenderManager::FlushDescriptors(int frame) {
-	for (auto iter : pipelineLayouts_) {
+	// Writing the descriptors can take a while, so only hold the lock to grab the list. Otherwise we'd stall
+	// BeginFrame for the next frame, which wants it for ResetDescriptorLists.
+	// The layouts can't go away under us, their actual deletion is deferred until the frames using them are done.
+	std::vector<VKRPipelineLayout *> layouts;
+	{
+		std::lock_guard<std::mutex> guard(pipelineLayoutsMutex_);
+		layouts = pipelineLayouts_;
+	}
+	for (auto iter : layouts) {
 		iter->FlushDescSets(vulkan_, frame, &frameData_[frame].profile);
 	}
 }
 
 void VulkanRenderManager::ResetDescriptorLists(int frame) {
+	std::lock_guard<std::mutex> guard(pipelineLayoutsMutex_);
 	for (auto iter : pipelineLayouts_) {
 		VKRPipelineLayout::FrameData &data = iter->frameData[frame];
 
