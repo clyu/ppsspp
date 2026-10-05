@@ -793,15 +793,16 @@ void TextureCacheVulkan::BuildTexture(TexCacheEntry *const entry) {
 			g_OSD.Show(OSDType::MESSAGE_WARNING, err->T("Warning: Video memory FULL, switching to slow caching mode"), 2.0f);
 		}
 
-		// Turn off texture replacement for this texture.
-		plan.replaced = nullptr;
-
+		// Give up on upscaling for this texture. Replaced textures are never upscaled, so they're simply
+		// retried as they are - sizes, level count and format below all follow the replacement, we can't just drop it.
 		plan.createW /= plan.scaleFactor;
 		plan.createH /= plan.scaleFactor;
 		plan.scaleFactor = 1;
-		actualFmt = dstFmt;
+		// The compute path needs STORAGE usage and the GENERAL layout, and there's nothing left for it to scale anyway.
+		computeUpload = false;
 
-		allocSuccess = image->CreateDirect(plan.createW, plan.createH, plan.depth, plan.levelsToCreate, actualFmt, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, &barrier, mapping);
+		// Still need TRANSFER_SRC here, we might have mips to generate.
+		allocSuccess = image->CreateDirect(plan.createW, plan.createH, plan.depth, plan.levelsToCreate, actualFmt, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, &barrier, mapping);
 		barrier.Flush(cmdInit);
 	}
 
